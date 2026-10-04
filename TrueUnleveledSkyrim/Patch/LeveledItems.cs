@@ -4,10 +4,10 @@ using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.Plugins.Cache;
 using Mutagen.Bethesda.Plugins.Aspects;
+using Mutagen.Bethesda.Plugins.Exceptions;
 using Mutagen.Bethesda.Plugins.Records;
 
 using TrueUnleveledSkyrim.Config;
-using System.Collections.Immutable;
 
 namespace TrueUnleveledSkyrim.Patch
 {
@@ -93,7 +93,7 @@ namespace TrueUnleveledSkyrim.Patch
             if(itemData.Level == maxLevel && !shouldRemove)
             {
                 if(itemData.Reference.TryResolve(linkCache, out var resolvedItem) && resolvedItem.EditorID is not null)
-                    shouldRemove = resolvedItem.EditorID.ToLower().Contains("glass");
+                    shouldRemove = resolvedItem.EditorID.Contains("glass", StringComparison.OrdinalIgnoreCase);
             }
 
             return shouldRemove;
@@ -160,25 +160,94 @@ namespace TrueUnleveledSkyrim.Patch
             return wasChanged;
         }
 
-        private static void ChangeNewLVLIEntries(LeveledItem itemList, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, ILinkCache linkCache)
+        // Points the entries of a generated weak/strong list at the matching generated weak/strong versions of nested lists.
+        private static void ChangeNewLVLIEntries(LeveledItem itemList, string usedPostfix, ILinkCache linkCache)
         {
-            bool isWeakEntry = itemList.EditorID!.Contains(TUSConstants.WeakPostfix, StringComparison.OrdinalIgnoreCase);
-            bool isStrongEntry = !isWeakEntry && itemList.EditorID!.Contains(TUSConstants.StrongPostfix, StringComparison.OrdinalIgnoreCase);
-            if (!isWeakEntry && !isStrongEntry)
-                return;
-
-            string usedPostfix = isWeakEntry ? TUSConstants.WeakPostfix : TUSConstants.StrongPostfix;
             foreach(LeveledItemEntry entry in itemList.Entries.EmptyIfNull())
             {
                 if (entry.Data is null) continue;
-                IItemGetter? resolvedEntry = entry.Data.Reference.TryResolve(linkCache);
-                if(resolvedEntry is ILeveledItemGetter lvliGetter)
+
+                if (entry.Data.Reference.TryResolve(linkCache) is ILeveledItemGetter lvliGetter &&
+                    GeneratedRecords.TryGetLeveledItem(lvliGetter.EditorID, usedPostfix, out var newEntry))
                 {
-                    LeveledItem? newEntry = state.PatchMod.LeveledItems.Where(x => x.EditorID == lvliGetter.EditorID + usedPostfix).FirstOrDefault();
-                    if(newEntry is not null)
-                        entry.Data.Reference = newEntry.ToLink();
+                    entry.Data.Reference = newEntry.ToLink();
                 }
             }
+        }
+
+        // Checks if a list is excluded from patching by the excludedLVLI.json definitions.
+        private static bool IsExcluded(LeveledItem itemList)
+        {
+            if (itemList.EditorID is null)
+                return false;
+
+            return excludedLVLI!.Keys.Any(key => itemList.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)) &&
+                   !excludedLVLI.ForbiddenKeys.Any(key => itemList.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Patches a single list. Returns true if a record was written to the patch. Generated weak/strong variants are counted in generatedVariants.
+        private static bool PatchList(ILeveledItemGetter lvlItemGetter, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, bool allowEmptyLists, ref uint generatedVariants)
+        {
+            bool wasChanged = false;
+            LeveledItem listCopy = lvlItemGetter.DeepCopy();
+
+            if (IsArtifactList(listCopy, Patcher.LinkCache))
+            {
+                wasChanged |= CullArtifactList(listCopy);
+            }
+            else
+            {
+                if (IsExcluded(listCopy))
+                    return false;
+
+                wasChanged |= RemoveRareItems(listCopy, Patcher.LinkCache);
+                GetLevelBoundaries(listCopy, out var lvlMin, out var lvlMax);
+
+                // Variants are looked up by EditorID, so lists without one can't have any.
+                if (listCopy.EditorID is not null && lvlMin != short.MaxValue && lvlMax != -1 && lvlMin != lvlMax)
+                {
+                    var weakCopy = new LeveledItem(state.PatchMod);
+                    var strongCopy = new LeveledItem(state.PatchMod);
+                    weakCopy.DeepCopyIn(listCopy);
+                    strongCopy.DeepCopyIn(listCopy);
+                    weakCopy.EditorID += TUSConstants.WeakPostfix;
+                    strongCopy.EditorID += TUSConstants.StrongPostfix;
+
+                    int lvlMed = (int)Math.Round((lvlMin + lvlMax) * 0.465);
+                    RemoveItemsWithRange(weakCopy, lvlMed + 1, lvlMax);
+                    RemoveItemsWithRange(strongCopy, lvlMin, lvlMed - 1);
+
+                    UnlevelList(weakCopy);
+                    UnlevelList(strongCopy);
+
+                    if (weakCopy.Entries is not null && weakCopy.Entries.Any())
+                    {
+                        state.PatchMod.LeveledItems.Set(weakCopy);
+                        GeneratedRecords.RegisterLeveledItem(weakCopy, TUSConstants.WeakPostfix);
+                        ++generatedVariants;
+                    }
+
+                    if (strongCopy.Entries is not null && strongCopy.Entries.Any())
+                    {
+                        state.PatchMod.LeveledItems.Set(strongCopy);
+                        GeneratedRecords.RegisterLeveledItem(strongCopy, TUSConstants.StrongPostfix);
+                        ++generatedVariants;
+                    }
+                }
+            }
+
+            if (!allowEmptyLists && (listCopy.Entries is null || !listCopy.Entries.Any()))
+            {
+                listCopy.DeepCopyIn(lvlItemGetter);
+                wasChanged = false;
+            }
+
+            wasChanged |= UnlevelList(listCopy);
+
+            if (wasChanged)
+                state.PatchMod.LeveledItems.Set(listCopy);
+
+            return wasChanged;
         }
 
         // Main function to unlevel all leveled item lists.
@@ -189,68 +258,30 @@ namespace TrueUnleveledSkyrim.Patch
             bool allowEmptyLists = Patcher.ModSettings.Value.Items.AllowEmptyLists;
 
             uint processedRecords = 0;
-            var staticList = state.LoadOrder.PriorityOrder.LeveledItem().WinningOverrides().ToImmutableList();
-            foreach (var lvlItemGetter in staticList)
+            uint changedRecords = 0;
+            uint generatedVariants = 0;
+            foreach (var lvlItemGetter in state.LoadOrder.PriorityOrder.LeveledItem().WinningOverrides())
             {
-                bool wasChanged = false;
-                LeveledItem listCopy = lvlItemGetter.DeepCopy();
-
-                if (IsArtifactList(listCopy, Patcher.LinkCache))
+                try
                 {
-                    wasChanged |= CullArtifactList(listCopy);
+                    if (PatchList(lvlItemGetter, state, allowEmptyLists, ref generatedVariants))
+                        ++changedRecords;
                 }
-                else
+                catch (Exception ex)
                 {
-                    if (listCopy.EditorID is not null &&
-                        excludedLVLI.Keys.Any(key => listCopy.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)) && !excludedLVLI.ForbiddenKeys.Any(key => listCopy.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)))
-                        continue;
-
-                    wasChanged |= RemoveRareItems(listCopy, Patcher.LinkCache);
-                    GetLevelBoundaries(listCopy, out var lvlMin, out var lvlMax);
-                    if (lvlMin != short.MaxValue && lvlMax != -1 && lvlMin != lvlMax)
-                    {
-                        var weakCopy = new LeveledItem(state.PatchMod);
-                        var strongCopy = new LeveledItem(state.PatchMod);
-                        weakCopy.DeepCopyIn(listCopy);
-                        strongCopy.DeepCopyIn(listCopy);
-                        weakCopy.EditorID += TUSConstants.WeakPostfix;
-                        strongCopy.EditorID += TUSConstants.StrongPostfix;
-
-                        int lvlMed = (int)Math.Round((lvlMin + lvlMax) * 0.465);
-                        RemoveItemsWithRange(weakCopy, lvlMed + 1, lvlMax);
-                        RemoveItemsWithRange(strongCopy, lvlMin, lvlMed - 1);
-
-                        UnlevelList(weakCopy);
-                        UnlevelList(strongCopy);
-
-                        if (weakCopy.Entries is not null && weakCopy.Entries.Any())
-                            state.PatchMod.LeveledItems.Set(weakCopy);
-                        if (strongCopy.Entries is not null && strongCopy.Entries.Any())
-                            state.PatchMod.LeveledItems.Set(strongCopy);
-                    }
+                    throw RecordException.Enrich(ex, lvlItemGetter);
                 }
-
-                if (!allowEmptyLists && (listCopy.Entries is null || !listCopy.Entries.Any()))
-                {
-                    listCopy.DeepCopyIn(lvlItemGetter);
-                    wasChanged = false;
-                }
-
-                wasChanged |= UnlevelList(listCopy);
 
                 ++processedRecords;
                 if (processedRecords % 100 == 0)
                     Console.WriteLine("Processed " + processedRecords + " leveled item lists.");
-
-                if (wasChanged)
-                    state.PatchMod.LeveledItems.Set(listCopy);
             }
 
             Console.WriteLine("Updating newly generated leveled list references.");
-            foreach(var entry in state.PatchMod.LeveledItems)
-                ChangeNewLVLIEntries(entry, state, Patcher.LinkCache);
+            foreach (var (generatedList, postfix) in GeneratedRecords.GeneratedLeveledItems)
+                ChangeNewLVLIEntries(generatedList, postfix, Patcher.LinkCache);
 
-            Console.WriteLine("Processed " + processedRecords + " leveled item lists in total.\n");
+            Console.WriteLine("Processed " + processedRecords + " leveled item lists in total, changed " + changedRecords + ", generated " + generatedVariants + " weak/strong variants.\n");
         }
     }
 }

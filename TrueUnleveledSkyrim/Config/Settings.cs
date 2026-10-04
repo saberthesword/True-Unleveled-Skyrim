@@ -32,6 +32,10 @@ namespace TrueUnleveledSkyrim.Config
         public bool RebalanceEquipment { get; set; } = true;
 
         public TUSConfig_Morrowloot Rebalance { get; set; } = new TUSConfig_Morrowloot();
+
+
+        [Tooltip("Seed for the random numbers used when picking zone and faction-based NPC levels. The same seed and load order always produce the same patch. Change it to get a different roll.")]
+        public int RandomSeed { get; set; } = 0x54555331;
     }
 
     public class TUSConfig_Items
@@ -145,4 +149,4 @@ namespace TrueUnleveledSkyrim.Config
         [Tooltip("If enabled, tempering is made about 40% less effective across the board for balancing reasons, making way for the artifacts to shine without Smithing being mandatory.")]
         public bool TemperingDebuff { get; set; } = true;
     }
-}
+}

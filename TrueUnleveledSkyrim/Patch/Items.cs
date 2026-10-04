@@ -14,51 +14,45 @@ namespace TrueUnleveledSkyrim.Patch
         private static ILinkCache BaseCache { get; set; } = null!;
 
         // A struct to hold the original and morrowloot-inspired stats of an armor.
-        private class ArmorValues(
-            float armorValue,
-            float armorWeight,
-            uint armorPrice,
-            float armorValueMod,
-            float armorWeightMod,
-            uint armorPriceMod)
+        private class ArmorValues
         {
-            public float ArmorValue { get; set; } = armorValue;
-            public float ArmorWeight { get; set; } = armorWeight;
-            public double ArmorPrice { get; set; } = armorPrice;
+            public float ArmorValue { get; set; }
+            public float ArmorWeight { get; set; }
+            public double ArmorPrice { get; set; }
 
-            public float ArmorValueMod { get; set; } = armorValueMod;
-            public float ArmorWeightMod { get; set; } = armorWeightMod;
-            public double ArmorPriceMod { get; set; } = armorPriceMod;
+            public float ArmorValueMod { get; set; }
+            public float ArmorWeightMod { get; set; }
+            public double ArmorPriceMod { get; set; }
+
+            public ArmorValues(float armorValue, float armorWeight, uint armorPrice, float armorValueMod, float armorWeightMod, uint armorPriceMod)
+            {
+                ArmorValue = armorValue; ArmorWeight = armorWeight; ArmorPrice = armorPrice;
+                ArmorValueMod = armorValueMod; ArmorWeightMod = armorWeightMod; ArmorPriceMod = armorPriceMod;
+            }
         };
 
         // A struct to hold the original and morrowloot-inspired stats of a weapon.
-        private class WeaponValues(
-            float weaponDamage,
-            float weaponWeight,
-            float weaponPrice,
-            float weaponSpeed,
-            float weaponCritDamage,
-            float weaponCritMult,
-            float weaponDamageMod,
-            float weaponWeightMod,
-            float weaponPriceMod,
-            float weaponSpeedMod,
-            float weaponCritDamageMod,
-            float weaponCritMultMod)
+        private class WeaponValues
         {
-            public float WeaponDamage { get; set; } = weaponDamage;
-            public float WeaponWeight { get; set; } = weaponWeight;
-            public double WeaponPrice { get; set; } = weaponPrice;
-            public float WeaponSpeed { get; set; } = weaponSpeed;
-            public float WeaponCritDamage { get; set; } = weaponCritDamage;
-            public float WeaponCritMult { get; set; } = weaponCritMult;
+            public float WeaponDamage { get; set; }
+            public float WeaponWeight { get; set; }
+            public double WeaponPrice { get; set; }
+            public float WeaponSpeed { get; set; }
+            public float WeaponCritDamage { get; set; }
+            public float WeaponCritMult { get; set; }
 
-            public float WeaponDamageMod { get; set; } = weaponDamageMod;
-            public float WeaponWeightMod { get; set; } = weaponWeightMod;
-            public double WeaponPriceMod { get; set; } = weaponPriceMod;
-            public float WeaponSpeedMod { get; set; } = weaponSpeedMod;
-            public float WeaponCritDamageMod { get; set; } = weaponCritDamageMod;
-            public float WeaponCritMultMod { get; set; } = weaponCritMultMod;
+            public float WeaponDamageMod { get; set; }
+            public float WeaponWeightMod { get; set; }
+            public double WeaponPriceMod { get; set; }
+            public float WeaponSpeedMod { get; set; }
+            public float WeaponCritDamageMod { get; set; }
+            public float WeaponCritMultMod { get; set; }
+
+            public WeaponValues(float weaponDamage, float weaponWeight, float weaponPrice, float weaponSpeed, float weaponCritDamage, float weaponCritMult, float weaponDamageMod, float weaponWeightMod, float weaponPriceMod, float weaponSpeedMod, float weaponCritDamageMod, float weaponCritMultMod)
+            {
+                WeaponDamage = weaponDamage; WeaponWeight = weaponWeight; WeaponPrice = weaponPrice; WeaponSpeed = weaponSpeed; WeaponCritDamage = weaponCritDamage; WeaponCritMult = weaponCritMult;
+                WeaponDamageMod = weaponDamageMod; WeaponWeightMod = weaponWeightMod; WeaponPriceMod = weaponPriceMod; WeaponSpeedMod = weaponSpeedMod; WeaponCritDamageMod = weaponCritDamageMod; WeaponCritMultMod = weaponCritMultMod;
+            }
         };
 
         private static List<IFormLinkGetter<IKeywordGetter>> WeaponMaterialKeywords { get; } = new List<IFormLinkGetter<IKeywordGetter>>
@@ -152,12 +146,13 @@ namespace TrueUnleveledSkyrim.Patch
                 if (!GetWeaponKeyword(resolvedWeapon, WeaponMaterialKeywords, out var weaponMaterial)) continue;
                 if (!GetWeaponKeyword(resolvedWeapon, WeaponTypeKeywords, out var weaponType)) continue;
 
-                weaponKeys[weaponMaterial!][weaponType!].WeaponDamage = resolvedWeapon.BasicStats?.Damage ?? weaponKeys[weaponMaterial!][weaponType!].WeaponDamage;
-                weaponKeys[weaponMaterial!][weaponType!].WeaponWeight = resolvedWeapon.BasicStats?.Weight ?? weaponKeys[weaponMaterial!][weaponType!].WeaponWeight;
-                weaponKeys[weaponMaterial!][weaponType!].WeaponPrice = resolvedWeapon.BasicStats?.Value ?? weaponKeys[weaponMaterial!][weaponType!].WeaponPrice;
-                weaponKeys[weaponMaterial!][weaponType!].WeaponSpeed = resolvedWeapon.Data?.Speed ?? weaponKeys[weaponMaterial!][weaponType!].WeaponSpeed;
-                weaponKeys[weaponMaterial!][weaponType!].WeaponCritDamage = resolvedWeapon.Critical?.Damage ?? weaponKeys[weaponMaterial!][weaponType!].WeaponCritDamage;
-                weaponKeys[weaponMaterial!][weaponType!].WeaponCritMult = resolvedWeapon.Critical?.PercentMult ?? weaponKeys[weaponMaterial!][weaponType!].WeaponCritMult;
+                var values = weaponKeys[weaponMaterial!][weaponType!];
+                values.WeaponDamage = resolvedWeapon.BasicStats?.Damage ?? values.WeaponDamage;
+                values.WeaponWeight = resolvedWeapon.BasicStats?.Weight ?? values.WeaponWeight;
+                values.WeaponPrice = resolvedWeapon.BasicStats?.Value ?? values.WeaponPrice;
+                values.WeaponSpeed = resolvedWeapon.Data?.Speed ?? values.WeaponSpeed;
+                values.WeaponCritDamage = resolvedWeapon.Critical?.Damage ?? values.WeaponCritDamage;
+                values.WeaponCritMult = resolvedWeapon.Critical?.PercentMult ?? values.WeaponCritMult;
             }
         }
 
@@ -272,8 +267,8 @@ namespace TrueUnleveledSkyrim.Patch
         };
 
 
-        private static List<IFormLinkGetter<IKeywordGetter>> ArmorMaterialKeywords { get; } =
-        [
+        private static List<IFormLinkGetter<IKeywordGetter>> ArmorMaterialKeywords { get; } = new List<IFormLinkGetter<IKeywordGetter>>
+        {
             Skyrim.Keyword.ArmorMaterialDaedric,
             Skyrim.Keyword.ArmorMaterialDragonplate,
             Skyrim.Keyword.ArmorMaterialDragonscale,
@@ -282,19 +277,19 @@ namespace TrueUnleveledSkyrim.Patch
             Skyrim.Keyword.ArmorNightingale,
             Dragonborn.Keyword.DLC2ArmorMaterialStalhrimHeavy,
             Dragonborn.Keyword.DLC2ArmorMaterialStalhrimLight
-        ];
+        };
 
-        private static List<IFormLinkGetter<IKeywordGetter>> ArmorTypeKeywords { get; } =
-        [
+        private static List<IFormLinkGetter<IKeywordGetter>> ArmorTypeKeywords { get; } = new List<IFormLinkGetter<IKeywordGetter>>
+        {
             Skyrim.Keyword.ArmorBoots,
             Skyrim.Keyword.ArmorCuirass,
             Skyrim.Keyword.ArmorGauntlets,
             Skyrim.Keyword.ArmorHelmet,
             Skyrim.Keyword.ArmorShield
-        ];
+        };
 
-        private static List<IFormLinkGetter<IArmorGetter>> BaseArmors { get; } =
-        [
+        private static List<IFormLinkGetter<IArmorGetter>> BaseArmors { get; } = new List<IFormLinkGetter<IArmorGetter>>
+        {
             Skyrim.Armor.ArmorDaedricBoots,
             Skyrim.Armor.ArmorDaedricCuirass,
             Skyrim.Armor.ArmorDaedricGauntlets,
@@ -333,7 +328,7 @@ namespace TrueUnleveledSkyrim.Patch
             Dragonborn.Armor.DLC2ArmorStalhrimLightGauntlets,
             Dragonborn.Armor.DLC2ArmorStalhrimLightHelmet,
             Dragonborn.Armor.DLC2ArmorStalhrimShield
-        ];
+        };
 
         private static bool GetArmorKeyword(IArmorGetter resolvedItem, List<IFormLinkGetter<IKeywordGetter>> keyList, out IFormLinkGetter<IKeywordGetter>? availableKey)
         {
@@ -641,84 +636,97 @@ namespace TrueUnleveledSkyrim.Patch
             return Math.Ceiling(2 * value) / 2d;
         }
 
-        // Patches weapon stats to have a morrowloot-inspired balance while keeping their relative balance intended by the mod authors.
-        private static bool PatchWeaponValues(Weapon weaponEntry)
+        // Finds the morrowloot-inspired reference stats matching a weapon, or null if the weapon shouldn't be patched.
+        // Works on the read-only record so unaffected weapons never need to be copied.
+        private static WeaponValues? FindWeaponStats(IWeaponGetter weapon)
         {
-            if (weaponEntry.Keywords is null || weaponEntry.BasicStats is null || weaponEntry.Data is null || weaponEntry.Critical is null) return false;
-            if (Patcher.ModSettings.Value.Rebalance.SkipArtifacts && weaponEntry.Keywords.Contains(Skyrim.Keyword.DaedricArtifact)) return false;
-            if (Patcher.ModSettings.Value.Rebalance.SkipUniques && weaponEntry.Keywords.Contains(Skyrim.Keyword.MagicDisallowEnchanting)) return false;
+            if (weapon.Keywords is null || weapon.BasicStats is null || weapon.Data is null || weapon.Critical is null) return null;
 
-            bool wasChanged = false;
-            foreach (IFormLinkGetter<IKeywordGetter> materialKeyword in weaponEntry.Keywords)
+            var rebalanceSettings = Patcher.ModSettings.Value.Rebalance;
+            if (rebalanceSettings.SkipArtifacts && weapon.Keywords.Contains(Skyrim.Keyword.DaedricArtifact)) return null;
+            if (rebalanceSettings.SkipUniques && weapon.Keywords.Contains(Skyrim.Keyword.MagicDisallowEnchanting)) return null;
+
+            foreach (IFormLinkGetter<IKeywordGetter> materialKeyword in weapon.Keywords)
             {
-                if (wasChanged) break;
                 if (!weaponKeys.TryGetValue(materialKeyword, out var typeDict))
                     continue;
 
-                foreach (IFormLinkGetter<IKeywordGetter> typeKeyword in weaponEntry.Keywords)
+                foreach (IFormLinkGetter<IKeywordGetter> typeKeyword in weapon.Keywords)
                 {
-                    if (!typeDict.TryGetValue(typeKeyword, out var weaponStats))
-                        continue;
-                    
-                    weaponEntry.BasicStats.Damage = (ushort)Math.Round(weaponStats.WeaponDamageMod * (weaponEntry.BasicStats.Damage / weaponStats.WeaponDamage));
-                    weaponEntry.BasicStats.Weight = (float)RoundWithHalf(weaponStats.WeaponWeightMod * (weaponEntry.BasicStats.Weight / weaponStats.WeaponWeight));
-                    weaponEntry.BasicStats.Value = (uint)Math.Round(weaponStats.WeaponPriceMod * (weaponEntry.BasicStats.Value / weaponStats.WeaponPrice));
-
-                    weaponEntry.Data.Speed = weaponStats.WeaponSpeedMod * (weaponEntry.Data.Speed / weaponStats.WeaponSpeed);
-
-                    weaponEntry.Critical.Damage = (ushort)Math.Round(weaponStats.WeaponCritDamageMod * (weaponEntry.Critical.Damage / weaponStats.WeaponCritDamage));
-                    weaponEntry.Critical.PercentMult = weaponStats.WeaponCritMultMod * (weaponEntry.Critical.PercentMult / weaponStats.WeaponCritMult);
-                    wasChanged = true;
-                    break;
+                    if (typeDict.TryGetValue(typeKeyword, out var weaponStats))
+                        return weaponStats;
                 }
             }
 
-            return wasChanged;
+            return null;
         }
 
-        // Patches armor stats to have a morrowloot-inspired balance while keeping their relative balance intended by the mod authors.
-        private static bool PatchArmorValues(Armor armorEntry)
+        // Patches weapon stats to have a morrowloot-inspired balance while keeping their relative balance intended by the mod authors.
+        private static void PatchWeaponValues(Weapon weaponEntry, WeaponValues weaponStats)
         {
-            if (armorEntry.Keywords is null) return false;
-            if (Patcher.ModSettings.Value.Rebalance.SkipArtifacts && armorEntry.Keywords.Contains(Skyrim.Keyword.DaedricArtifact)) return false;
-            if (Patcher.ModSettings.Value.Rebalance.SkipUniques && armorEntry.Keywords.Contains(Skyrim.Keyword.MagicDisallowEnchanting)) return false;
+            weaponEntry.BasicStats!.Damage = (ushort)Math.Round(weaponStats.WeaponDamageMod * (weaponEntry.BasicStats.Damage / weaponStats.WeaponDamage));
+            weaponEntry.BasicStats.Weight = (float)RoundWithHalf(weaponStats.WeaponWeightMod * (weaponEntry.BasicStats.Weight / weaponStats.WeaponWeight));
+            weaponEntry.BasicStats.Value = (uint)Math.Round(weaponStats.WeaponPriceMod * (weaponEntry.BasicStats.Value / weaponStats.WeaponPrice));
 
-            bool wasChanged = false;
-            foreach(IFormLinkGetter<IKeywordGetter> materialKeyword in armorEntry.Keywords)
+            weaponEntry.Data!.Speed = weaponStats.WeaponSpeedMod * (weaponEntry.Data.Speed / weaponStats.WeaponSpeed);
+
+            weaponEntry.Critical!.Damage = (ushort)Math.Round(weaponStats.WeaponCritDamageMod * (weaponEntry.Critical.Damage / weaponStats.WeaponCritDamage));
+            weaponEntry.Critical.PercentMult = weaponStats.WeaponCritMultMod * (weaponEntry.Critical.PercentMult / weaponStats.WeaponCritMult);
+        }
+
+        // Finds the morrowloot-inspired reference stats matching an armor, or null if the armor shouldn't be patched.
+        // Works on the read-only record so unaffected armors never need to be copied.
+        private static ArmorValues? FindArmorStats(IArmorGetter armor)
+        {
+            if (armor.Keywords is null) return null;
+
+            var rebalanceSettings = Patcher.ModSettings.Value.Rebalance;
+            if (rebalanceSettings.SkipArtifacts && armor.Keywords.Contains(Skyrim.Keyword.DaedricArtifact)) return null;
+            if (rebalanceSettings.SkipUniques && armor.Keywords.Contains(Skyrim.Keyword.MagicDisallowEnchanting)) return null;
+
+            ArmorType armorType = armor.BodyTemplate?.ArmorType ?? ArmorType.Clothing;
+            if (armorType != ArmorType.HeavyArmor && armorType != ArmorType.LightArmor) return null;
+            IFormLinkGetter<IKeywordGetter> weightClass = armorType == ArmorType.HeavyArmor ? Skyrim.Keyword.ArmorHeavy : Skyrim.Keyword.ArmorLight;
+
+            foreach (IFormLinkGetter<IKeywordGetter> materialKeyword in armor.Keywords)
             {
-                if (wasChanged) break;
                 if (!armorKeys.TryGetValue(materialKeyword, out var typeDict))
                     continue;
 
-                Dictionary<IFormLinkGetter<IKeywordGetter>, ArmorValues>? weightDict;
-                bool isHeavy = (armorEntry.BodyTemplate?.ArmorType ?? ArmorType.Clothing) == ArmorType.HeavyArmor;
-                bool isLight = (armorEntry.BodyTemplate?.ArmorType ?? ArmorType.Clothing) == ArmorType.LightArmor;
-                if (isHeavy)
-                    typeDict.TryGetValue(Skyrim.Keyword.ArmorHeavy, out weightDict);
-                else if (isLight)
-                    typeDict.TryGetValue(Skyrim.Keyword.ArmorLight, out weightDict);
-                else continue;
+                if (!typeDict.TryGetValue(weightClass, out var weightDict))
+                    continue;
 
-                foreach (IFormLinkGetter<IKeywordGetter> armorKeyword2 in armorEntry.Keywords)
+                foreach (IFormLinkGetter<IKeywordGetter> pieceKeyword in armor.Keywords)
                 {
-                    if (weightDict is null || !weightDict.TryGetValue(armorKeyword2, out var armorStats))
-                        continue;
-
-                    armorEntry.ArmorRating =    (float)RoundWithHalf(armorStats.ArmorValueMod * (armorEntry.ArmorRating / armorStats.ArmorValue));
-                    armorEntry.Weight =         (float)RoundWithHalf(armorStats.ArmorWeightMod * (armorEntry.Weight / armorStats.ArmorWeight));
-                    armorEntry.Value =          (uint)(armorStats.ArmorPriceMod * (armorEntry.Value / armorStats.ArmorPrice));
-                    wasChanged = true;
-                    break;
+                    if (weightDict.TryGetValue(pieceKeyword, out var armorStats))
+                        return armorStats;
                 }
-
             }
 
-            return wasChanged;
+            return null;
+        }
+
+        // Patches armor stats to have a morrowloot-inspired balance while keeping their relative balance intended by the mod authors.
+        private static void PatchArmorValues(Armor armorEntry, ArmorValues armorStats)
+        {
+            armorEntry.ArmorRating =    (float)RoundWithHalf(armorStats.ArmorValueMod * (armorEntry.ArmorRating / armorStats.ArmorValue));
+            armorEntry.Weight =         (float)RoundWithHalf(armorStats.ArmorWeightMod * (armorEntry.Weight / armorStats.ArmorWeight));
+            armorEntry.Value =          (uint)(armorStats.ArmorPriceMod * (armorEntry.Value / armorStats.ArmorPrice));
         }
 
         private static void LoadBaseCache(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
-            BaseCache = LoadOrder.Import<ISkyrimModGetter>(state.DataFolderPath, Patcher.ModSettings.Value.Rebalance.BaseStatPlugins, Mutagen.Bethesda.GameRelease.SkyrimSE).PriorityOrder.ToImmutableLinkCache();
+            // The default list includes plugins like Unofficial Skyrim Special Edition Patch that not everyone has installed.
+            List<ModKey> availablePlugins = new();
+            foreach (ModKey modKey in Patcher.ModSettings.Value.Rebalance.BaseStatPlugins)
+            {
+                if (state.LoadOrder.ContainsKey(modKey))
+                    availablePlugins.Add(modKey);
+                else
+                    Console.WriteLine("Base stat plugin " + modKey + " is not in the load order, skipping it.");
+            }
+
+            BaseCache = LoadOrder.Import<ISkyrimModGetter>(state.DataFolderPath, availablePlugins, Mutagen.Bethesda.GameRelease.SkyrimSE).PriorityOrder.ToImmutableLinkCache();
         }
 
         // Main function to change all item stats to new morrowloot-inspired values.
@@ -729,22 +737,23 @@ namespace TrueUnleveledSkyrim.Patch
             ReadArmorValues();
 
             uint processedRecords = 0;
+            uint changedRecords = 0;
             foreach (IArmorGetter? armorGetter in state.LoadOrder.PriorityOrder.Armor().WinningOverrides())
             {
                 try
                 {
-                    bool wasChanged = false;
-                    Armor armorCopy = armorGetter.DeepCopy();
-
-                    wasChanged |= PatchArmorValues(armorCopy);
-
                     ++processedRecords;
                     if (processedRecords % 100 == 0)
                         Console.WriteLine("Processed " + processedRecords + " armors.");
 
-                    if (wasChanged)
-                        state.PatchMod.Armors.Set(armorCopy);
+                    ArmorValues? armorStats = FindArmorStats(armorGetter);
+                    if (armorStats is null)
+                        continue;
 
+                    Armor armorCopy = armorGetter.DeepCopy();
+                    PatchArmorValues(armorCopy, armorStats);
+                    state.PatchMod.Armors.Set(armorCopy);
+                    ++changedRecords;
                 }
                 catch (Exception ex)
                 {
@@ -752,30 +761,34 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            Console.WriteLine("Processed " + processedRecords + " armors in total.\n");
+            Console.WriteLine("Processed " + processedRecords + " armors in total, changed " + changedRecords + ".\n");
             processedRecords = 0;
+            changedRecords = 0;
 
             foreach (IWeaponGetter? weaponGetter in state.LoadOrder.PriorityOrder.Weapon().WinningOverrides())
             {
                 try
                 {
-                    bool wasChanged = false;
-                    Weapon weaponCopy = weaponGetter.DeepCopy();
-
-                    wasChanged |= PatchWeaponValues(weaponCopy);
-
                     ++processedRecords;
                     if (processedRecords % 100 == 0)
                         Console.WriteLine("Processed " + processedRecords + " weapons.");
 
-                    if (wasChanged)
-                        state.PatchMod.Weapons.Set(weaponCopy);
+                    WeaponValues? weaponStats = FindWeaponStats(weaponGetter);
+                    if (weaponStats is null)
+                        continue;
+
+                    Weapon weaponCopy = weaponGetter.DeepCopy();
+                    PatchWeaponValues(weaponCopy, weaponStats);
+                    state.PatchMod.Weapons.Set(weaponCopy);
+                    ++changedRecords;
                 }
                 catch (Exception ex)
                 {
                     throw RecordException.Enrich(ex, weaponGetter);
                 }
             }
+
+            Console.WriteLine("Processed " + processedRecords + " weapons in total, changed " + changedRecords + ".\n");
 
             if (Patcher.ModSettings.Value.Rebalance.TemperingDebuff)
             {
@@ -784,8 +797,6 @@ namespace TrueUnleveledSkyrim.Patch
                 armorGMST.EditorID = "fSmithingArmorMax"; weaponGMST.EditorID = "fSmithingWeaponMax";
                 armorGMST.Data = new float?(6); weaponGMST.Data = new float?(6);
             }
-
-            Console.WriteLine("Processed " + processedRecords + " weapons in total.\n");
         }
     }
 }

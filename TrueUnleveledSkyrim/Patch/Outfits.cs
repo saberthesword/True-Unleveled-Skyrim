@@ -2,65 +2,79 @@ using Mutagen.Bethesda;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.Plugins.Cache;
+using Mutagen.Bethesda.Plugins.Exceptions;
 using Mutagen.Bethesda.Plugins.Records;
 
 using TrueUnleveledSkyrim.Config;
-using System.Collections.Immutable;
 
 namespace TrueUnleveledSkyrim.Patch
 {
     class OutfitsPatcher
     {
-        // Replaces leveled item list entries in weak and strong outfit variants with the respective weak and strong variants of the list.
-        private static bool ReplaceLVLIEntries(Outfit outfit, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, ILinkCache linkCache, bool isWeak)
+        // Creates a weak or strong variant of an outfit, replacing leveled list entries with the respective generated variants of the list.
+        // Nothing is created (and no FormKey is consumed) when the outfit has no leveled list with a generated variant.
+        private static Outfit? CreateVariant(IOutfitGetter source, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, ILinkCache linkCache, string postfix)
         {
-            bool wasChanged = false;
-            for(int i = 0; i<outfit.Items!.Count; ++i)
+            if (source.Items is null || source.EditorID is null)
+                return null;
+
+            List<(int Index, LeveledItem Replacement)>? replacements = null;
+            for (int i = 0; i < source.Items.Count; ++i)
             {
-                ILeveledItemGetter? resolvedItem = outfit.Items[i].TryResolve<ILeveledItemGetter>(linkCache);
-                if (resolvedItem is not null)
-                {
-                    string usedPostfix = isWeak ? TUSConstants.WeakPostfix : TUSConstants.StrongPostfix;
-                    LeveledItem? newItem = state.PatchMod.LeveledItems.Where(x => x.EditorID == resolvedItem.EditorID + usedPostfix).FirstOrDefault();
-                    if (newItem is not null)
-                    {
-                        wasChanged = true;
-                        outfit.Items[i] = newItem.ToLink();
-                    }
-                }
+                ILeveledItemGetter? resolvedItem = source.Items[i].TryResolve<ILeveledItemGetter>(linkCache);
+                if (resolvedItem is null)
+                    continue;
+
+                if (!GeneratedRecords.TryGetLeveledItem(resolvedItem.EditorID, postfix, out var newItem))
+                    continue;
+
+                replacements ??= new();
+                replacements.Add((i, newItem));
             }
 
-            return wasChanged;
+            if (replacements is null)
+                return null;
+
+            Outfit variant = new(state.PatchMod);
+            variant.DeepCopyIn(source);
+            variant.EditorID = source.EditorID + postfix;
+            foreach (var (index, replacement) in replacements)
+                variant.Items![index] = replacement.ToLink();
+
+            return variant;
         }
 
         // Main function to unlevel outfits.
         public static void PatchOutfits(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
             uint processedRecords = 0;
-            var staticList = state.LoadOrder.PriorityOrder.Outfit().WinningOverrides().ToImmutableList();
-            foreach (IOutfitGetter? outfitGetter in staticList)
+            uint generatedRecords = 0;
+            foreach (IOutfitGetter outfitGetter in state.LoadOrder.PriorityOrder.Outfit().WinningOverrides())
             {
-                if (outfitGetter.Items is null) continue;
+                try
+                {
+                    ++processedRecords;
+                    if (processedRecords % 100 == 0)
+                        Console.WriteLine("Processed " + processedRecords + " outfits.");
 
-                Outfit weakCopy = new(state.PatchMod);
-                Outfit strongCopy = new(state.PatchMod);
-                weakCopy.DeepCopyIn(outfitGetter);
-                strongCopy.DeepCopyIn(outfitGetter);
-                weakCopy.EditorID += TUSConstants.WeakPostfix;
-                strongCopy.EditorID += TUSConstants.StrongPostfix;
+                    foreach (string postfix in new[] { TUSConstants.WeakPostfix, TUSConstants.StrongPostfix })
+                    {
+                        Outfit? variant = CreateVariant(outfitGetter, state, Patcher.LinkCache, postfix);
+                        if (variant is null)
+                            continue;
 
-                if (ReplaceLVLIEntries(weakCopy, state, Patcher.LinkCache, true))
-                    state.PatchMod.Outfits.Set(weakCopy);
-
-                if (ReplaceLVLIEntries(strongCopy, state, Patcher.LinkCache, false))
-                    state.PatchMod.Outfits.Set(strongCopy);
-
-                ++processedRecords;
-                if (processedRecords % 100 == 0)
-                    Console.WriteLine("Processed " + processedRecords + " outfits.");
+                        state.PatchMod.Outfits.Set(variant);
+                        GeneratedRecords.RegisterOutfit(variant);
+                        ++generatedRecords;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw RecordException.Enrich(ex, outfitGetter);
+                }
             }
 
-            Console.WriteLine("Processed " + processedRecords + " outfits in total.\n");
+            Console.WriteLine("Processed " + processedRecords + " outfits in total, generated " + generatedRecords + " weak/strong variants.\n");
         }
     }
 }

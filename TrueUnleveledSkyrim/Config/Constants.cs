@@ -29,18 +29,20 @@ namespace TrueUnleveledSkyrim.Config
 
         public static void GetPaths(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
-            ArtifactKeysPath = Path.Combine(state.ExtraSettingsDataPath!, ArtifactKeysPath);
-            FollowersPath = Path.Combine(state.ExtraSettingsDataPath!, FollowersPath);
-            ExcludedLVLIPath = Path.Combine(state.ExtraSettingsDataPath!, ExcludedLVLIPath);
-            ExcludedNPCsPath = Path.Combine(state.ExtraSettingsDataPath!, ExcludedNPCsPath);
-            ExcludedPerksPath = Path.Combine(state.ExtraSettingsDataPath!, ExcludedPerksPath);
-            NPCEDIDPath = Path.Combine(state.ExtraSettingsDataPath!, NPCEDIDPath);
-            NPCFactionPath = Path.Combine(state.ExtraSettingsDataPath!, NPCFactionPath);
-            RaceModifiersPath = Path.Combine(state.ExtraSettingsDataPath!, RaceModifiersPath);
-            ZoneTyesEDIDPath = Path.Combine(state.ExtraSettingsDataPath!, ZoneTyesEDIDPath);
-            ZoneTyesEDIDMLUPath = Path.Combine(state.ExtraSettingsDataPath!, ZoneTyesEDIDMLUPath);
-            ZoneTyesKeywordPath = Path.Combine(state.ExtraSettingsDataPath!, ZoneTyesKeywordPath);
-            ZoneTyesKeywordMLUPath = Path.Combine(state.ExtraSettingsDataPath!, ZoneTyesKeywordMLUPath);
+            string settingsPath = state.ExtraSettingsDataPath ?? throw new InvalidOperationException("The patcher's extra settings data path is not set, so the json config files can't be located.");
+
+            ArtifactKeysPath = Path.Combine(settingsPath, ArtifactKeysPath);
+            FollowersPath = Path.Combine(settingsPath, FollowersPath);
+            ExcludedLVLIPath = Path.Combine(settingsPath, ExcludedLVLIPath);
+            ExcludedNPCsPath = Path.Combine(settingsPath, ExcludedNPCsPath);
+            ExcludedPerksPath = Path.Combine(settingsPath, ExcludedPerksPath);
+            NPCEDIDPath = Path.Combine(settingsPath, NPCEDIDPath);
+            NPCFactionPath = Path.Combine(settingsPath, NPCFactionPath);
+            RaceModifiersPath = Path.Combine(settingsPath, RaceModifiersPath);
+            ZoneTyesEDIDPath = Path.Combine(settingsPath, ZoneTyesEDIDPath);
+            ZoneTyesEDIDMLUPath = Path.Combine(settingsPath, ZoneTyesEDIDMLUPath);
+            ZoneTyesKeywordPath = Path.Combine(settingsPath, ZoneTyesKeywordPath);
+            ZoneTyesKeywordMLUPath = Path.Combine(settingsPath, ZoneTyesKeywordMLUPath);
         }
 
     }

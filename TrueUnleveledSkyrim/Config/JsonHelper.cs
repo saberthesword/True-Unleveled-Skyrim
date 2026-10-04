@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 
 using Newtonsoft.Json;
@@ -10,19 +9,22 @@ namespace TrueUnleveledSkyrim.Config
     {
         public static T LoadConfig<T>(string configPath) where T : ConfigType
         {
-            T? configObject = null;
+            if (!File.Exists(configPath))
+                throw new FileNotFoundException("Config file not found: " + configPath, configPath);
+
+            T? configObject;
             try
             {
                 configObject = JsonConvert.DeserializeObject<T>(File.ReadAllText(configPath));
             }
-            catch(Exception ex)
+            catch (JsonException ex) // Covers both malformed JSON and values that don't match the expected format.
             {
-                if (ex is JsonSerializationException)
-                    Console.WriteLine("Incorrect config format for file: " + configPath + " \nMake sure to check and compare with the format in the original files provided in the patcher.");
+                throw new InvalidDataException("Incorrect config format for file: " + configPath + "\n" + ex.Message +
+                    "\nMake sure to check and compare with the format in the original files provided in the patcher.", ex);
             }
 
             if (configObject is null)
-                throw new FileNotFoundException(configPath + " is missing or empty.");
+                throw new InvalidDataException("Config file is empty: " + configPath);
 
             return configObject;
         }
