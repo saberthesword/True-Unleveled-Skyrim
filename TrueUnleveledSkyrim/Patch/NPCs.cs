@@ -389,6 +389,10 @@ namespace TrueUnleveledSkyrim.Patch
                 if (Patcher.ModSettings.Value.NPCs.RemoveVanillaPerks)
                     RemoveOldPerks(npc, vanillaCache);
 
+                // Custom perk trees the NPC qualifies for (by spells, factions, keywords...), and what they block from the regular trees.
+                List<CustomTree> customTrees = CustomPerksPatcher.GetQualifyingTrees(npc, npcRace, linkCache);
+                PerkBlockList? perkBlocks = CustomPerksPatcher.CreateBlockList(customTrees);
+
                 int perkOverflow = 0;
                 List<KeyValuePair<Skill, byte>> perkDistribution = npcClass.SkillWeights.ToList();
                 float weightSum = perkDistribution.Any() ? perkDistribution.Sum(x => x.Value) : 0;
@@ -404,6 +408,14 @@ namespace TrueUnleveledSkyrim.Patch
                     if (!GetTreeFromSkill(perkWeight.Key, linkCache, out var perkTree) || perkTree!.PerkTree is null)
                         continue;
 
+                    // Custom trees using this skill as proxy get their share of the points first, the rest goes to the regular tree.
+                    perksToSpend = CustomPerksPatcher.SpendPerks(npc, perkWeight.Key, perksToSpend, customTrees);
+                    if (perksToSpend <= 0)
+                    {
+                        perkOverflow = 0;
+                        continue;
+                    }
+
                     while(perksToSpend > 0)
                     {
                         bool wasPerkAdded = false;
@@ -418,6 +430,9 @@ namespace TrueUnleveledSkyrim.Patch
                             if (excludedPerks!.Keys.Any(key => perkEntry.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)) && !excludedPerks.ForbiddenKeys.Any(key => perkEntry.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)))
                                 continue;
 
+                            if (perkBlocks is not null && perkBlocks.Blocks(perkEntry))
+                                continue;
+
                             if (FulfillsPerkConditions(npc, perkEntry, perkWeight.Key, linkCache))
                             {
                                 --perksToSpend;
@@ -427,6 +442,9 @@ namespace TrueUnleveledSkyrim.Patch
 
                             while (perksToSpend > 0 && perkEntry.NextPerk.TryResolve<IPerkGetter>(linkCache, out perkEntry))
                             {
+                                if (perkBlocks is not null && perkBlocks.Blocks(perkEntry))
+                                    break;
+
                                 if (FulfillsPerkConditions(npc, perkEntry, perkWeight.Key, linkCache))
                                 {
                                     --perksToSpend;

@@ -78,6 +78,7 @@ namespace TrueUnleveledSkyrim
 
             LinkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
             GeneratedRecords.Clear();
+            CustomPerksPatcher.Reset();
 
             TUSConstants.GetPaths(state);
 
@@ -91,6 +92,10 @@ namespace TrueUnleveledSkyrim
 
             if (settings.UnlevelNPCs)
             {
+                // Must run before the NPC stage, which hands out the duplicated custom perks.
+                if (settings.NPCs.UseCustomPerkTrees && settings.NPCs.NPCPerksPerLevel > 0)
+                    RunStage("Custom perk trees", () => CustomPerksPatcher.PatchCustomPerks(state));
+
                 RunStage("NPCs", () => NPCsPatcher.PatchNPCs(state));
             }
 

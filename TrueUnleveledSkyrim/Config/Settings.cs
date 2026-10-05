@@ -122,6 +122,10 @@ namespace TrueUnleveledSkyrim.Config
 
         [Tooltip("NPCs that have any of the keywords on this list, either in their own entry or their race entry, will not have their perks modified in any way. Useful if you want to stop undead or vampires from getting perks distributed among them.")]
         public List<FormLink<IKeywordGetter>> PerkDistributionFilter { get; set; } = new();
+
+
+        [Tooltip("If enabled, the perk trees defined in customPerkTrees.json (for example perks from custom skill mods that normally only the player gets) are distributed to the NPCs that qualify for them, e.g. NPCs with frost spells get frost perks. Needs perk distribution to be enabled above.")]
+        public bool UseCustomPerkTrees { get; set; } = true;
     }
 
     public class TUSConfig_Morrowloot
