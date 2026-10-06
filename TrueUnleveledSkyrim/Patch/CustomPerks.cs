@@ -69,10 +69,48 @@ namespace TrueUnleveledSkyrim.Patch
         private static readonly List<CustomTree> trees = new();
         private static readonly Dictionary<FormKey, SpellInfo> spellInfoCache = new();
 
+        // Diagnostics, printed by PrintSummary at the end of the NPC stage.
+        private static int npcsEvaluated;
+        private static int npcsWithSpells;
+        private static readonly Dictionary<string, int> qualifiedCounts = new();
+        private static readonly Dictionary<string, int> grantedCounts = new();
+        private static readonly Dictionary<string, int> failureCounts = new();
+
         public static void Reset()
         {
             trees.Clear();
             spellInfoCache.Clear();
+            npcsEvaluated = 0;
+            npcsWithSpells = 0;
+            qualifiedCounts.Clear();
+            grantedCounts.Clear();
+            failureCounts.Clear();
+        }
+
+        private static void Count(Dictionary<string, int> counts, string key)
+        {
+            counts[key] = counts.TryGetValue(key, out int current) ? current + 1 : 1;
+        }
+
+        // Shows how many NPCs qualified for each tree, how many perks were handed out, and why the others didn't qualify.
+        public static void PrintSummary()
+        {
+            if (trees.Count == 0)
+                return;
+
+            Console.WriteLine("Custom perk trees: " + npcsEvaluated + " NPCs evaluated, " + npcsWithSpells + " of them have spells.");
+            foreach (CustomTree tree in trees)
+            {
+                string name = tree.Definition.TreeName;
+                qualifiedCounts.TryGetValue(name, out int qualified);
+                grantedCounts.TryGetValue(name, out int granted);
+                Console.WriteLine("  " + name + ": " + qualified + " NPCs qualified, " + granted + " perks granted (" + tree.Perks.Count + " perks in tree).");
+
+                foreach (var failure in failureCounts.Where(x => x.Key.StartsWith(name + "|")).OrderByDescending(x => x.Value))
+                    Console.WriteLine("      not qualified, " + failure.Key.Substring(name.Length + 1) + ": " + failure.Value);
+            }
+
+            Console.WriteLine();
         }
 
         private static bool TryParseSkill(string? name, out Skill skill)
@@ -130,6 +168,7 @@ namespace TrueUnleveledSkyrim.Patch
                 return;
             }
 
+            Console.WriteLine("Reading " + TUSConstants.CustomPerkTreesPath);
             CustomPerkTreeList definitions = JsonHelper.LoadConfig<CustomPerkTreeList>(TUSConstants.CustomPerkTreesPath);
 
             Dictionary<string, IPerkGetter> perkLookup = new(StringComparer.OrdinalIgnoreCase);
@@ -307,6 +346,7 @@ namespace TrueUnleveledSkyrim.Patch
             public HashSet<string> ActorKeywords => actorKeywords ??= CollectActorKeywords();
             public HashSet<string> FactionIDs => factionIDs ??= CollectFactionIDs();
             public SpellData Spells => spells ??= CollectSpells();
+            public bool HasSpells => spells is not null && (spells.IDs.Count > 0 || spells.Keywords.Count > 0 || spells.Schools.Count > 0);
 
             private HashSet<string> CollectActorKeywords()
             {
@@ -387,34 +427,34 @@ namespace TrueUnleveledSkyrim.Patch
                 ((name?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false) || (npc.EditorID?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false)));
         }
 
-        // Every criterion a tree defines has to hold for the NPC.
-        private static bool Qualifies(CustomTree tree, Npc npc, NpcTraits traits)
+        // Every criterion a tree defines has to hold for the NPC. Returns the first criterion that failed, or null if the NPC qualifies.
+        private static string? GetFailedCriterion(CustomTree tree, Npc npc, NpcTraits traits)
         {
             CustomPerkTree definition = tree.Definition;
 
             if (definition.NameKeys.Count > 0 && !NameOrIDContainsAny(npc, definition.NameKeys))
-                return false;
+                return "name keys";
 
             if (definition.ForbiddenKeys.Count > 0 && NameOrIDContainsAny(npc, definition.ForbiddenKeys))
-                return false;
+                return "forbidden name keys";
 
             if (definition.ActorTypeKeywords.Count > 0 && !definition.ActorTypeKeywords.Any(keyword => traits.ActorKeywords.Contains(keyword)))
-                return false;
+                return "actor type keywords";
 
             if (definition.RequiredSpellKeywords.Count > 0 && !definition.RequiredSpellKeywords.Any(keyword => traits.Spells.Keywords.Contains(keyword)))
-                return false;
+                return "spell keywords";
 
             if (tree.SpellIDPatterns.Count > 0 && !tree.SpellIDPatterns.Any(regex => traits.Spells.IDs.Any(id => regex.IsMatch(id))))
-                return false;
+                return "spell IDs";
 
             if (definition.Factions.Count > 0 && !definition.Factions.Any(faction => traits.FactionIDs.Contains(faction)))
-                return false;
+                return "factions";
 
             // Non-caster guard: a tree proxied by a magic school only applies to NPCs that really have a spell of that school.
             if (tree.ProxySkill is Skill proxySkill && MagicSchools.Contains(proxySkill) && !traits.Spells.Schools.Contains(proxySkill.ToString()))
-                return false;
+                return "no " + proxySkill + " spell";
 
-            return true;
+            return null;
         }
 
         public static List<CustomTree> GetQualifyingTrees(Npc npc, IRaceGetter race, ILinkCache linkCache)
@@ -423,12 +463,24 @@ namespace TrueUnleveledSkyrim.Patch
             if (trees.Count == 0)
                 return qualifying;
 
+            ++npcsEvaluated;
             NpcTraits traits = new(npc, race, linkCache);
             foreach (CustomTree tree in trees)
             {
-                if (Qualifies(tree, npc, traits))
+                string? failedCriterion = GetFailedCriterion(tree, npc, traits);
+                if (failedCriterion is null)
+                {
                     qualifying.Add(tree);
+                    Count(qualifiedCounts, tree.Definition.TreeName);
+                }
+                else
+                {
+                    Count(failureCounts, tree.Definition.TreeName + "|" + failedCriterion);
+                }
             }
+
+            if (traits.HasSpells)
+                ++npcsWithSpells;
 
             return qualifying;
         }
@@ -469,7 +521,7 @@ namespace TrueUnleveledSkyrim.Patch
                 return points;
 
             byte skillValue = npc.PlayerSkills!.SkillValues[skill];
-            foreach (CustomPerk perk in skillTrees.SelectMany(tree => tree.Perks).OrderBy(perk => perk.RequiredLevel))
+            foreach (var (owner, perk) in skillTrees.SelectMany(t => t.Perks.Select(p => (Owner: t, Perk: p))).OrderBy(x => x.Perk.RequiredLevel))
             {
                 if (customBudget <= 0)
                     break;
@@ -482,6 +534,7 @@ namespace TrueUnleveledSkyrim.Patch
                     continue;
 
                 npc.Perks!.Add(new PerkPlacement() { Perk = perk.Duplicate.ToLink(), Rank = 1 });
+                Count(grantedCounts, owner.Definition.TreeName);
                 --customBudget;
                 --points;
             }

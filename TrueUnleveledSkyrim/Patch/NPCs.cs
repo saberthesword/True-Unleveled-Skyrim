@@ -1042,6 +1042,7 @@ namespace TrueUnleveledSkyrim.Patch
 
             DisableExtraDamagePerks(state);
 
+            CustomPerksPatcher.PrintSummary();
             Console.WriteLine("Processed " + processedRecords + " npcs in total, changed " + changedRecords + ".\n");
         }
     }
