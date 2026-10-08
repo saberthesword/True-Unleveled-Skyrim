@@ -79,6 +79,7 @@ namespace TrueUnleveledSkyrim
             LinkCache = state.LoadOrder.PriorityOrder.ToImmutableLinkCache();
             GeneratedRecords.Clear();
             CustomPerksPatcher.Reset();
+            SpellDistributor.Reset();
 
             TUSConstants.GetPaths(state);
 

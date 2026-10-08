@@ -90,11 +90,19 @@ namespace TrueUnleveledSkyrim.Config
         // The vanilla skill whose perk points are spent on this tree, e.g. "Destruction".
         [JsonProperty] public string ProxyVanillaSkill { get; set; } = string.Empty;
 
+        // Optional. Trees with the same group (e.g. two fire trees) share their perks. When an NPC qualifies for several groups, they take
+        // turns being handed perks. Defaults to the tree's own name.
+        [JsonProperty] public string Group { get; set; } = string.Empty;
+
         // Every non-empty criterion below has to be met for an NPC to qualify for the tree.
         [JsonProperty] public List<string> Factions { get; set; } = new();
         [JsonProperty] public List<string> ActorTypeKeywords { get; set; } = new();
         [JsonProperty] public List<string> RequiredSpellKeywords { get; set; } = new();
         [JsonProperty] public List<string> RequiredSpellIDs { get; set; } = new();
+
+        // Spell elements: Fire, Frost, Shock, Poison, Summoning, Necromancy. Classified the same way as in the spell distributor patcher.
+        [JsonProperty] public List<string> RequiredSpellElements { get; set; } = new();
+
         [JsonProperty] public List<string> NameKeys { get; set; } = new();
         [JsonProperty] public List<string> ForbiddenKeys { get; set; } = new();
 
@@ -111,6 +119,49 @@ namespace TrueUnleveledSkyrim.Config
     public class CustomPerkTreeList : ConfigType
     {
         [JsonProperty] public List<CustomPerkTree> CustomTrees { get; set; } = new();
+    }
+
+    // spellRules.json
+    public class SpellSelector
+    {
+        // Exact spell EditorIDs.
+        [JsonProperty] public List<string> SpellIDs { get; set; } = new();
+
+        // Parts of plugin file names, e.g. "Venomancy". Compared ignoring case.
+        [JsonProperty] public List<string> Plugins { get; set; } = new();
+
+        // Only used by MustNotReceive: Fire, Frost, Shock, Poison, Summoning, Necromancy, Mixed.
+        [JsonProperty] public List<string> Elements { get; set; } = new();
+
+        // Only used by MustNotReceive: Alteration, Conjuration, Destruction, Illusion, Restoration.
+        [JsonProperty] public List<string> Schools { get; set; } = new();
+    }
+
+    public class SpellRule
+    {
+        [JsonProperty] public string Name { get; set; } = string.Empty;
+        [JsonProperty] public bool Enabled { get; set; } = true;
+
+        // Who the rule applies to. Every non-empty criterion has to match, and at least one has to be set.
+        // Keys are matched against the NPC's name and EditorID, and forbidden keys veto the rule.
+        [JsonProperty] public List<string> NameKeys { get; set; } = new();
+        [JsonProperty] public List<string> ForbiddenKeys { get; set; } = new();
+        [JsonProperty] public List<string> Factions { get; set; } = new();
+        [JsonProperty] public List<string> ActorTypeKeywords { get; set; } = new();
+
+        // Spells the NPC always gets. SpellIDs are given as they are. Spells selected by Plugins still respect the NPC's level and magicka.
+        [JsonProperty] public SpellSelector MustReceive { get; set; } = new();
+
+        // If false, the NPC gets none of the regular distribution, only the MustReceive spells.
+        [JsonProperty] public bool NaturalDistribution { get; set; } = true;
+
+        // Spells the NPC never gets, from any source. Wins over MustReceive.
+        [JsonProperty] public SpellSelector MustNotReceive { get; set; } = new();
+    }
+
+    public class SpellRuleList : ConfigType
+    {
+        [JsonProperty] public List<SpellRule> Rules { get; set; } = new();
     }
 
     // raceLevelModifiers.json

@@ -36,6 +36,18 @@ namespace TrueUnleveledSkyrim.Config
 
         [Tooltip("Seed for the random numbers used when picking zone and faction-based NPC levels. The same seed and load order always produce the same patch. Change it to get a different roll.")]
         public int RandomSeed { get; set; } = 0x54555331;
+
+
+        [Tooltip("If enabled, writes a text report of what happened to each NPC (spells, perks and custom perk trees received) and why NPCs got no spells.")]
+        public bool WriteReport { get; set; } = false;
+
+
+        [Tooltip("Full path of the report file. Leave empty to write TUS_Report.txt next to the patcher. The path used is printed in the log.")]
+        public string ReportPath { get; set; } = string.Empty;
+
+
+        [Tooltip("NPCs whose name or EditorID contains one of these words get a full trace in the report, including the reason they did NOT get spells or custom perk trees. Useful to find out why a specific NPC got nothing.")]
+        public List<string> ReportWatchlist { get; set; } = new();
     }
 
     public class TUSConfig_Items
@@ -126,6 +138,18 @@ namespace TrueUnleveledSkyrim.Config
 
         [Tooltip("If enabled, the perk trees defined in customPerkTrees.json (for example perks from custom skill mods that normally only the player gets) are distributed to the NPCs that qualify for them, e.g. NPCs with frost spells get frost perks. Needs perk distribution to be enabled above.")]
         public bool UseCustomPerkTrees { get; set; } = true;
+
+
+        [Tooltip("If enabled, NPCs that use magic are given extra spells from the load order that fit them: their element (fire, frost, shock, poison, summoning...), their magic school and their level. Only spells that can be learned from a spell tome are given out. Runs before classes and perks are built, so those take the new spells into account.")]
+        public bool DistributeSpells { get; set; } = true;
+
+
+        [Tooltip("Spells from any of these plugins are never given to NPCs.")]
+        public List<ModKey> BlacklistedSpellPlugins { get; set; } = new();
+
+
+        [Tooltip("These specific spells are never given to NPCs.")]
+        public List<FormLink<ISpellGetter>> BlacklistedSpells { get; set; } = new();
     }
 
     public class TUSConfig_Morrowloot

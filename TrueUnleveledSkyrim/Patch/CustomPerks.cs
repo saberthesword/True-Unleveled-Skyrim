@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 
 using Noggog;
 using Mutagen.Bethesda;
+using Mutagen.Bethesda.FormKeys.SkyrimSE;
 using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Cache;
 using Mutagen.Bethesda.Plugins.Records;
@@ -12,6 +13,9 @@ using TrueUnleveledSkyrim.Config;
 
 namespace TrueUnleveledSkyrim.Patch
 {
+    // Same element classification the spell distributor patcher uses, so both patchers agree on what a spell is.
+    internal enum SpellElement { None, Fire, Frost, Shock, Poison, Summoning, Necromancy, Mixed }
+
     // The perks a specific NPC must not receive from the regular perk trees, built from the trees the NPC qualifies for.
     internal sealed class PerkBlockList
     {
@@ -47,7 +51,11 @@ namespace TrueUnleveledSkyrim.Patch
         {
             Definition = definition;
             ProxySkill = proxySkill;
+            GroupName = string.IsNullOrWhiteSpace(definition.Group) ? definition.TreeName : definition.Group.Trim();
         }
+
+        // Trees of the same group (for example two fire trees) share their perks. Different groups take turns when perks are handed out.
+        public string GroupName { get; }
 
         public CustomPerkTree Definition { get; }
         public Skill? ProxySkill { get; }
@@ -188,11 +196,18 @@ namespace TrueUnleveledSkyrim.Patch
                 definition.ActorTypeKeywords ??= new();
                 definition.RequiredSpellKeywords ??= new();
                 definition.RequiredSpellIDs ??= new();
+                definition.RequiredSpellElements ??= new();
                 definition.NameKeys ??= new();
                 definition.ForbiddenKeys ??= new();
                 definition.BlockedPerkKeys ??= new();
                 definition.BlockedPerkPlugins ??= new();
                 definition.Perks ??= new();
+
+                foreach (string element in definition.RequiredSpellElements)
+                {
+                    if (!Enum.TryParse(element, true, out SpellElement _))
+                        Console.WriteLine("[Warning] Tree '" + definition.TreeName + "' has an unknown spell element '" + element + "'. Valid: Fire, Frost, Shock, Poison, Summoning, Necromancy, Mixed.");
+                }
 
                 Skill? proxySkill = null;
                 if (TryParseSkill(definition.ProxyVanillaSkill, out Skill parsedSkill))
@@ -289,6 +304,7 @@ namespace TrueUnleveledSkyrim.Patch
             public SpellInfo(string? editorID) { EditorID = editorID; }
 
             public string? EditorID { get; }
+            public SpellElement Element { get; set; }
             public HashSet<string> Keywords { get; } = new(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> Schools { get; } = new(StringComparer.OrdinalIgnoreCase);
         }
@@ -298,15 +314,67 @@ namespace TrueUnleveledSkyrim.Patch
             public HashSet<string> Keywords { get; } = new(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> IDs { get; } = new(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> Schools { get; } = new(StringComparer.OrdinalIgnoreCase);
+            public HashSet<string> Elements { get; } = new(StringComparer.OrdinalIgnoreCase);
         }
 
-        // Keywords, schools of a spell's effects. Cached because the same spells are shared by many NPCs.
+        // Decides a spell's element. Ported from the spell distributor patcher: summoning and necromancy are recognised by name,
+        // the damage elements by the keywords and resistance of the spell's effects.
+        private static SpellElement ClassifyElement(ISpellGetter spell, bool hasFire, bool hasFrost, bool hasShock, bool hasPoison)
+        {
+            string name = spell.Name?.String?.ToLowerInvariant() ?? "";
+            string editorID = spell.EditorID?.ToLowerInvariant() ?? "";
+
+            if (name.Contains("reanimate") || name.Contains("raise ") || name.Contains("zombie") ||
+                name.Contains("corpse") || name.Contains("thrall") || name.Contains("skeleton") ||
+                name.Contains("boneman") || name.Contains("mistman") || name.Contains("wrathman") ||
+                editorID.Contains("reanimate") || editorID.Contains("raise") || editorID.Contains("necromancy"))
+            {
+                return SpellElement.Necromancy;
+            }
+
+            if (name.Contains("conjure") || name.Contains("summon") || name.Contains("familiar") ||
+                name.Contains("atronach") || name.Contains("dremora") || name.Contains("bound ") ||
+                editorID.Contains("conjure") || editorID.Contains("summon") || editorID.Contains("bound"))
+            {
+                return SpellElement.Summoning;
+            }
+
+            int elementCount = (hasFire ? 1 : 0) + (hasFrost ? 1 : 0) + (hasShock ? 1 : 0) + (hasPoison ? 1 : 0);
+            if (elementCount > 1) return SpellElement.Mixed;
+            if (hasFire) return SpellElement.Fire;
+            if (hasFrost) return SpellElement.Frost;
+            if (hasShock) return SpellElement.Shock;
+            if (hasPoison) return SpellElement.Poison;
+
+            return SpellElement.None;
+        }
+
+        // The element of a spell, classified the same way the perk trees see it. Shared with the spell distribution.
+        public static SpellElement GetSpellElement(ISpellGetter spell, ILinkCache linkCache)
+        {
+            return GetSpellInfo(spell, linkCache).Element;
+        }
+
+        // Keywords, schools and element of a spell's effects. Cached because the same spells are shared by many NPCs.
         private static SpellInfo GetSpellInfo(ISpellGetter spell, ILinkCache linkCache)
         {
             if (spellInfoCache.TryGetValue(spell.FormKey, out SpellInfo? cached))
                 return cached;
 
             SpellInfo info = new(spell.EditorID);
+            bool hasFire = false, hasFrost = false, hasShock = false, hasPoison = false;
+
+            // Keywords can sit on the spell record itself as well as on its magic effects, so both count.
+            foreach (var keywordLink in spell.Keywords.EmptyIfNull())
+            {
+                if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageFire.FormKey) hasFire = true;
+                if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageFrost.FormKey) hasFrost = true;
+                if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageShock.FormKey) hasShock = true;
+
+                if (keywordLink.TryResolve(linkCache, out var spellKeyword) && spellKeyword.EditorID is not null)
+                    info.Keywords.Add(spellKeyword.EditorID.Trim());
+            }
+
             foreach (var effect in spell.Effects)
             {
                 if (effect.BaseEffect.IsNull || !effect.BaseEffect.TryResolve(linkCache, out var mgefGetter))
@@ -315,13 +383,25 @@ namespace TrueUnleveledSkyrim.Patch
                 if (mgefGetter.MagicSkill != ActorValue.None)
                     info.Schools.Add(mgefGetter.MagicSkill.ToString());
 
+                if (mgefGetter.ResistValue == ActorValue.PoisonResist)
+                    hasPoison = true;
+
+                string effectID = mgefGetter.EditorID?.ToLowerInvariant() ?? "";
+                if (effectID.Contains("poison") || effectID.Contains("toxic") || effectID.Contains("venom") || effectID.Contains("acid"))
+                    hasPoison = true;
+
                 foreach (var keywordLink in mgefGetter.Keywords.EmptyIfNull())
                 {
+                    if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageFire.FormKey) hasFire = true;
+                    if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageFrost.FormKey) hasFrost = true;
+                    if (keywordLink.FormKey == Skyrim.Keyword.MagicDamageShock.FormKey) hasShock = true;
+
                     if (keywordLink.TryResolve(linkCache, out var keyword) && keyword.EditorID is not null)
                         info.Keywords.Add(keyword.EditorID.Trim());
                 }
             }
 
+            info.Element = ClassifyElement(spell, hasFire, hasFrost, hasShock, hasPoison);
             spellInfoCache[spell.FormKey] = info;
             return info;
         }
@@ -404,6 +484,8 @@ namespace TrueUnleveledSkyrim.Patch
 
                             data.Keywords.UnionWith(info.Keywords);
                             data.Schools.UnionWith(info.Schools);
+                            if (info.Element != SpellElement.None)
+                                data.Elements.Add(info.Element.ToString());
                         }
                         else if (node is ILeveledSpellGetter leveledSpell)
                         {
@@ -444,6 +526,9 @@ namespace TrueUnleveledSkyrim.Patch
             if (definition.RequiredSpellKeywords.Count > 0 && !definition.RequiredSpellKeywords.Any(keyword => traits.Spells.Keywords.Contains(keyword)))
                 return "spell keywords";
 
+            if (definition.RequiredSpellElements.Count > 0 && !definition.RequiredSpellElements.Any(element => traits.Spells.Elements.Contains(element)))
+                return "spell elements";
+
             if (tree.SpellIDPatterns.Count > 0 && !tree.SpellIDPatterns.Any(regex => traits.Spells.IDs.Any(id => regex.IsMatch(id))))
                 return "spell IDs";
 
@@ -472,10 +557,12 @@ namespace TrueUnleveledSkyrim.Patch
                 {
                     qualifying.Add(tree);
                     Count(qualifiedCounts, tree.Definition.TreeName);
+                    PatchReport.Add(npc, "Qualifies for custom tree '" + tree.Definition.TreeName + "'");
                 }
                 else
                 {
                     Count(failureCounts, tree.Definition.TreeName + "|" + failedCriterion);
+                    PatchReport.Trace(npc, "Custom tree '" + tree.Definition.TreeName + "': not qualified (" + failedCriterion + ")");
                 }
             }
 
@@ -485,27 +572,38 @@ namespace TrueUnleveledSkyrim.Patch
             return qualifying;
         }
 
-        // Combines the block lists of every tree the NPC qualifies for. They apply to the regular perk trees only,
-        // the perks of a tree the NPC qualifies for are never blocked.
+        // Builds what the NPC must not receive from the regular perk trees. Only trees that block something have a say, and a perk
+        // is only blocked if all of them block it. An NPC built around two elements therefore keeps the perks of both, instead of
+        // each tree blocking the other's element. Applies to the regular trees only, the perks of a tree the NPC qualifies for are never blocked.
         public static PerkBlockList? CreateBlockList(List<CustomTree> qualifyingTrees)
         {
-            PerkBlockList? blockList = null;
-            foreach (CustomTree tree in qualifyingTrees)
-            {
-                if (tree.Definition.BlockedPerkKeys.Count == 0 && tree.Definition.BlockedPerkPlugins.Count == 0)
-                    continue;
+            List<CustomTree> blockingTrees = qualifyingTrees
+                .Where(tree => tree.Definition.BlockedPerkKeys.Count > 0 || tree.Definition.BlockedPerkPlugins.Count > 0)
+                .ToList();
+            if (blockingTrees.Count == 0)
+                return null;
 
-                blockList ??= new();
-                blockList.PerkKeys.AddRange(tree.Definition.BlockedPerkKeys);
-                blockList.Plugins.AddRange(tree.Definition.BlockedPerkPlugins);
+            HashSet<string> keys = new(blockingTrees[0].Definition.BlockedPerkKeys, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> plugins = new(blockingTrees[0].Definition.BlockedPerkPlugins, StringComparer.OrdinalIgnoreCase);
+            foreach (CustomTree tree in blockingTrees.Skip(1))
+            {
+                keys.IntersectWith(tree.Definition.BlockedPerkKeys);
+                plugins.IntersectWith(tree.Definition.BlockedPerkPlugins);
             }
 
+            if (keys.Count == 0 && plugins.Count == 0)
+                return null;
+
+            PerkBlockList blockList = new();
+            blockList.PerkKeys.AddRange(keys);
+            blockList.Plugins.AddRange(plugins);
             return blockList;
         }
 
         // Spends perk points of the given skill on the perks of the qualifying custom trees that use it as their proxy skill.
-        // Only a share of the points goes to custom perks (the rest stays for the regular tree), and perks are taken lowest
-        // requirement first. Returns the points that are left.
+        // Only a share of the points goes to custom perks (the rest stays for the regular tree). Each group of trees keeps its own
+        // list, lowest requirement first, and the groups take turns, so an NPC with several elements gets perks from every one of
+        // them instead of only from the tree with the cheapest perks. Returns the points that are left.
         public static byte SpendPerks(Npc npc, Skill skill, byte points, List<CustomTree> qualifyingTrees)
         {
             if (points == 0 || qualifyingTrees.Count == 0)
@@ -521,22 +619,49 @@ namespace TrueUnleveledSkyrim.Patch
                 return points;
 
             byte skillValue = npc.PlayerSkills!.SkillValues[skill];
-            foreach (var (owner, perk) in skillTrees.SelectMany(t => t.Perks.Select(p => (Owner: t, Perk: p))).OrderBy(x => x.Perk.RequiredLevel))
+
+            List<Queue<(CustomTree Owner, CustomPerk Perk)>> queues = skillTrees
+                .GroupBy(tree => tree.GroupName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new Queue<(CustomTree Owner, CustomPerk Perk)>(
+                    group.SelectMany(tree => tree.Perks.Select(perk => (Owner: tree, Perk: perk))).OrderBy(entry => entry.Perk.RequiredLevel)))
+                .ToList();
+
+            while (customBudget > 0 && queues.Count > 0)
             {
-                if (customBudget <= 0)
+                bool grantedThisRound = false;
+                foreach (var queue in queues)
+                {
+                    if (customBudget <= 0)
+                        break;
+
+                    // The next perk of this group the NPC can take.
+                    while (queue.Count > 0)
+                    {
+                        var (owner, perk) = queue.Dequeue();
+
+                        // Sorted by requirement, so nothing after this one can be afforded either.
+                        if (perk.RequiredLevel > skillValue)
+                        {
+                            queue.Clear();
+                            break;
+                        }
+
+                        if (npc.Perks!.Any(x => x.Perk.FormKey == perk.Duplicate.FormKey))
+                            continue;
+
+                        npc.Perks!.Add(new PerkPlacement() { Perk = perk.Duplicate.ToLink(), Rank = 1 });
+                        Count(grantedCounts, owner.Definition.TreeName);
+                        PatchReport.Add(npc, "Custom perk " + perk.Duplicate.EditorID + " from '" + owner.Definition.TreeName + "' (needs skill " + perk.RequiredLevel + ")");
+                        --customBudget;
+                        --points;
+                        grantedThisRound = true;
+                        break;
+                    }
+                }
+
+                queues.RemoveAll(queue => queue.Count == 0);
+                if (!grantedThisRound)
                     break;
-
-                // Sorted by requirement, so nothing after this one can be afforded either.
-                if (perk.RequiredLevel > skillValue)
-                    break;
-
-                if (npc.Perks!.Any(x => x.Perk.FormKey == perk.Duplicate.FormKey))
-                    continue;
-
-                npc.Perks!.Add(new PerkPlacement() { Perk = perk.Duplicate.ToLink(), Rank = 1 });
-                Count(grantedCounts, owner.Definition.TreeName);
-                --customBudget;
-                --points;
             }
 
             return points;

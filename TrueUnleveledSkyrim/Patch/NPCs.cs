@@ -462,11 +462,21 @@ namespace TrueUnleveledSkyrim.Patch
                     }
                 }
 
+                if (PatchReport.Enabled)
+                {
+                    string mainSkills = string.Join(", ", perkDistribution.Where(x => x.Value > 0).OrderByDescending(x => x.Value).Take(4)
+                        .Select(x => x.Key + " " + npc.PlayerSkills!.SkillValues[x.Key]));
+                    PatchReport.Add(npc, "Perk points: " + Math.Round(perksPerLevel) + " to spend, " + perkOverflow + " left unspent. Main skills: " + mainSkills);
+                }
+
                 if (npc.Perks.Count == 0)
                     npc.Perks = null;
 
                 // Only report a change when the perks differ, otherwise every eligible NPC would be written to the patch for nothing.
-                return !originalPerks.SequenceEqual(npc.Perks?.Select(x => x.Perk.FormKey) ?? Enumerable.Empty<FormKey>());
+                List<FormKey> finalPerks = npc.Perks?.Select(x => x.Perk.FormKey).ToList() ?? new List<FormKey>();
+                PatchReport.AddPerkChanges(npc, originalPerks, finalPerks, linkCache);
+
+                return !originalPerks.SequenceEqual(finalPerks);
             }
 
             return false;
@@ -998,6 +1008,12 @@ namespace TrueUnleveledSkyrim.Patch
 
             PopulateTreePerksCache(state.LinkCache);
 
+            PatchReport.Start();
+
+            // Spells go out first so the class rebuild and perk distribution below see them.
+            if (Patcher.ModSettings.Value.NPCs.DistributeSpells)
+                SpellDistributor.Prepare(state);
+
             uint processedRecords = 0;
             uint changedRecords = 0;
             var vanillaCache = LoadOrder.Import<ISkyrimModGetter>(state.DataFolderPath, new List<ModKey>() { Skyrim.ModKey, Dawnguard.ModKey, Dragonborn.ModKey }, GameRelease.SkyrimSE).PriorityOrder.ToImmutableLinkCache();
@@ -1022,6 +1038,7 @@ namespace TrueUnleveledSkyrim.Patch
                     Npc npcCopy = npcGetter.DeepCopy();
 
                     wasChanged |= SetStaticLevel(npcCopy, Patcher.LinkCache);
+                    wasChanged |= SpellDistributor.DistributeSpells(npcCopy, Patcher.LinkCache); // after the static level, before the class is rebuilt from the NPC's spells
                     wasChanged |= RebalanceClassValues(npcCopy, state, Patcher.LinkCache); // since it uses a static link cache it has to go before equipment changes, otherwise it will try to use missing data
                     wasChanged |= ChangeEquipment(npcCopy, Patcher.LinkCache);
                     wasChanged |= RelevelNPCSkills(npcCopy, state.LinkCache); // dynamic link cache to account for local class changes
@@ -1042,7 +1059,9 @@ namespace TrueUnleveledSkyrim.Patch
 
             DisableExtraDamagePerks(state);
 
+            SpellDistributor.PrintSummary();
             CustomPerksPatcher.PrintSummary();
+            PatchReport.Write();
             Console.WriteLine("Processed " + processedRecords + " npcs in total, changed " + changedRecords + ".\n");
         }
     }

@@ -20,6 +20,7 @@ namespace TrueUnleveledSkyrim.Config
         public static string ExcludedNPCsPath { get; set; } = "excludedNPCs.json";
         public static string ExcludedPerksPath { get; set; } = "excludedPerks.json";
         public static string CustomPerkTreesPath { get; set; } = "customPerkTrees.json";
+        public static string SpellRulesPath { get; set; } = "spellRules.json";
         public static string NPCEDIDPath { get; set; } = "NPCsByEDID.json";
         public static string NPCFactionPath { get; set; } = "NPCsByFaction.json";
         public static string RaceModifiersPath { get; set; } = "raceLevelModifiers.json";
@@ -38,6 +39,7 @@ namespace TrueUnleveledSkyrim.Config
             ExcludedNPCsPath = Path.Combine(settingsPath, ExcludedNPCsPath);
             ExcludedPerksPath = Path.Combine(settingsPath, ExcludedPerksPath);
             CustomPerkTreesPath = Path.Combine(settingsPath, CustomPerkTreesPath);
+            SpellRulesPath = Path.Combine(settingsPath, SpellRulesPath);
             NPCEDIDPath = Path.Combine(settingsPath, NPCEDIDPath);
             NPCFactionPath = Path.Combine(settingsPath, NPCFactionPath);
             RaceModifiersPath = Path.Combine(settingsPath, RaceModifiersPath);
