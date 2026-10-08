@@ -1057,7 +1057,9 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            if (npc.CombatStyle.TryResolve(linkCache, out var combatStyle))
+            // Resolved through the read-only view, the same way the original spell patcher did it.
+            INpcGetter npcView = npc;
+            if (npcView.CombatStyle.TryResolve(linkCache, out var combatStyle))
             {
                 string styleId = combatStyle.EditorID?.ToLowerInvariant() ?? "";
                 if (styleId.Contains("archer") || styleId.Contains("warrior") || styleId.Contains("melee") ||

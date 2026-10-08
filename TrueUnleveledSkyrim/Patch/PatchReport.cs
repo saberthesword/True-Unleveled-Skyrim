@@ -80,7 +80,8 @@ namespace TrueUnleveledSkyrim.Patch
 
         private static string PerkName(FormKey key, ILinkCache linkCache)
         {
-            return new FormLink<IPerkGetter>(key).TryResolve(linkCache, out var perk) && perk.EditorID is not null ? perk.EditorID : key.ToString();
+            // Same form as the perk lookups in the NPC stage: the cache resolves a link.
+            return linkCache.TryResolve(new FormLink<IPerkGetter>(key), out var perk) && perk.EditorID is not null ? perk.EditorID : key.ToString();
         }
 
         // Custom perks are reported separately, so only the other changes are listed here.
