@@ -12,8 +12,6 @@ using TrueUnleveledSkyrim.Config;
 
 namespace TrueUnleveledSkyrim.Patch
 {
-    internal enum SpellTheme { None, Vampire, Holy }
-
     /// <summary>
     /// Gives NPCs that use magic extra spells from the load order, matching their element, magic school and level.
     /// Ported from the standalone spell distributor patcher. It runs inside the NPC stage right after the static level is set,
@@ -33,7 +31,8 @@ namespace TrueUnleveledSkyrim.Patch
             public SpellElement Element { get; set; }
             public MagicSchool School { get; set; }
             public PerkLevel RequiredLevel { get; set; }
-            public SpellTheme Theme { get; set; }
+            // Indexes of the spell groups (spellRules.json) the spell belongs to.
+            public int[] GroupIndices { get; set; } = Array.Empty<int>();
 
             // Not learnable from a book, only kept for NPCs covered by a plugin-only rule. Never part of the normal distribution.
             public bool ExclusiveOnly { get; set; }
@@ -72,44 +71,103 @@ namespace TrueUnleveledSkyrim.Patch
             { Skyrim.Perk.RestorationMaster100.FormKey, (MagicSchool.Restoration, PerkLevel.Master) },
         };
 
-        // ---- Rules specific to the mods in this load order ----------------------------------------------------
+        // ---- Spell groups (spellRules.json) -----------------------------------------------------------------------
+        // A group is a set of spells (by plugin or EditorID) that only certain NPCs may receive, such as the spells of a vampire
+        // magic mod. Members are the NPCs allowed to get them, AlwaysGiven NPCs get them whether or not the regular distribution would
+        // pick them, and ExcludedNpcs never get them. A spell outside every group can go to anyone the regular distribution picks.
 
-        // Spells from these plugins are only given to NPCs the rule accepts.
-        private static readonly Dictionary<string, Func<INpcGetter, bool>> ExclusivePluginRules = new(StringComparer.OrdinalIgnoreCase)
+        private static readonly List<SpellGroup> spellGroups = new();
+
+        // Which groups an NPC may receive spells from, and which it always receives them from (indexes into spellGroups).
+        private sealed class NpcGroupAccess
         {
-            {
-                "Aqua.esl", npc =>
-                {
-                    string id = npc.EditorID?.ToLowerInvariant() ?? "";
-                    return id.Contains("dlc2miraak") || (id.Contains("dlc2") && id.Contains("cultist"));
-                }
-            }
-        };
-
-        // Themed spells are identified by the plugin they come from. Plugin names are compared in lower case.
-        private static SpellTheme GetSpellTheme(ISpellGetter spell)
-        {
-            string pluginName = spell.FormKey.ModKey.FileName.String.ToLowerInvariant();
-
-            if (pluginName.Contains("ancientbloodii.esl") || pluginName.Contains("bloodmoon.esp"))
-                return SpellTheme.Vampire;
-
-            if (pluginName.Contains("inquisition.esp"))
-                return SpellTheme.Holy;
-
-            return SpellTheme.None;
+            public HashSet<int> Members { get; } = new();
+            public HashSet<int> Always { get; } = new();
         }
 
-        private static readonly Dictionary<string, List<SpellTheme>> ThemeOverrides = new(StringComparer.OrdinalIgnoreCase)
+        private static int[] GetGroupIndices(ISpellGetter spell)
         {
-            { "DLC1Serana", new List<SpellTheme> { SpellTheme.Vampire } },
-            { "DLC1Valerica", new List<SpellTheme> { SpellTheme.Vampire } },
-        };
+            List<int> indices = new();
+            for (int i = 0; i < spellGroups.Count; i++)
+            {
+                SpellGroup group = spellGroups[i];
+                bool inGroup = group.Plugins.Any(snippet => IsFromPlugin(spell, snippet)) ||
+                               (spell.EditorID is not null && group.SpellIDs.Any(id => id.Equals(spell.EditorID, StringComparison.OrdinalIgnoreCase)));
+                if (inGroup)
+                    indices.Add(i);
+            }
 
-        private static readonly Dictionary<string, List<SpellTheme>> ThemeBlacklist = new(StringComparer.OrdinalIgnoreCase)
+            return indices.ToArray();
+        }
+
+        private static bool MatcherMatches(SpellNpcMatcher matcher, Npc npc, RuleTraits traits)
         {
-            { "thrall", new List<SpellTheme> { SpellTheme.Vampire } }
-        };
+            bool hasCriteria = matcher.EditorIDKeys.Count + matcher.RequiredEditorIDKeys.Count + matcher.NameKeys.Count +
+                               matcher.Factions.Count + matcher.ActorTypeKeywords.Count > 0;
+            if (!hasCriteria)
+                return false;
+
+            string? name = npc.Name?.String;
+            string? editorId = npc.EditorID;
+
+            bool InEditorId(string key) => editorId?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false;
+            bool InNameOrEditorId(string key) => (name?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false) || InEditorId(key);
+
+            if (matcher.EditorIDKeys.Count > 0 && !matcher.EditorIDKeys.Any(InEditorId)) return false;
+            if (matcher.RequiredEditorIDKeys.Count > 0 && !matcher.RequiredEditorIDKeys.All(InEditorId)) return false;
+            if (matcher.NameKeys.Count > 0 && !matcher.NameKeys.Any(InNameOrEditorId)) return false;
+            if (matcher.ForbiddenKeys.Count > 0 && matcher.ForbiddenKeys.Any(InNameOrEditorId)) return false;
+            if (matcher.ActorTypeKeywords.Count > 0 && !matcher.ActorTypeKeywords.Any(keyword => traits.Keywords.Contains(keyword))) return false;
+            if (matcher.Factions.Count > 0 && !matcher.Factions.Any(faction => traits.Factions.Contains(faction))) return false;
+
+            return true;
+        }
+
+        private static NpcGroupAccess ResolveGroups(Npc npc, RuleTraits traits)
+        {
+            NpcGroupAccess access = new();
+            for (int i = 0; i < spellGroups.Count; i++)
+            {
+                SpellGroup group = spellGroups[i];
+                if (group.ExcludedNpcs.Any(matcher => MatcherMatches(matcher, npc, traits)))
+                    continue;
+
+                bool always = group.AlwaysGiven.Any(matcher => MatcherMatches(matcher, npc, traits));
+                if (always)
+                    access.Always.Add(i);
+
+                if (always || group.Members.Any(matcher => MatcherMatches(matcher, npc, traits)))
+                    access.Members.Add(i);
+            }
+
+            return access;
+        }
+
+        // A spell that belongs to groups can only go to NPCs that are members of all of them.
+        private static bool GroupsAllow(CachedSpell spell, NpcGroupAccess access)
+        {
+            return spell.GroupIndices.All(index => access.Members.Contains(index));
+        }
+
+        private static List<SpellNpcMatcher> CleanMatchers(List<SpellNpcMatcher>? matchers)
+        {
+            List<SpellNpcMatcher> cleaned = new();
+            foreach (SpellNpcMatcher matcher in matchers ?? new List<SpellNpcMatcher>())
+            {
+                if (matcher is null)
+                    continue;
+
+                matcher.EditorIDKeys = CleanList(matcher.EditorIDKeys);
+                matcher.RequiredEditorIDKeys = CleanList(matcher.RequiredEditorIDKeys);
+                matcher.NameKeys = CleanList(matcher.NameKeys);
+                matcher.ForbiddenKeys = CleanList(matcher.ForbiddenKeys);
+                matcher.Factions = CleanList(matcher.Factions);
+                matcher.ActorTypeKeywords = CleanList(matcher.ActorTypeKeywords);
+                cleaned.Add(matcher);
+            }
+
+            return cleaned;
+        }
 
         // ---- Spell rules (spellRules.json) ------------------------------------------------------------------------
         // A rule describes a kind of NPC and what it does with spells: which spells it must receive, whether it also takes part in the
@@ -232,11 +290,35 @@ namespace TrueUnleveledSkyrim.Patch
         private static void LoadRules(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
             compiledRules.Clear();
+            spellGroups.Clear();
             if (!File.Exists(TUSConstants.SpellRulesPath))
                 return;
 
             SpellRuleList ruleList = JsonHelper.LoadConfig<SpellRuleList>(TUSConstants.SpellRulesPath);
             HashSet<string> neededIDs = new(StringComparer.OrdinalIgnoreCase);
+
+            foreach (SpellGroup group in ruleList.SpellGroups ?? new List<SpellGroup>())
+            {
+                if (!group.Enabled)
+                    continue;
+
+                group.Plugins = CleanList(group.Plugins);
+                group.SpellIDs = CleanList(group.SpellIDs);
+                group.Members = CleanMatchers(group.Members);
+                group.AlwaysGiven = CleanMatchers(group.AlwaysGiven);
+                group.ExcludedNpcs = CleanMatchers(group.ExcludedNpcs);
+
+                if (group.Plugins.Count == 0 && group.SpellIDs.Count == 0)
+                {
+                    Console.WriteLine("[Warning] Spell group '" + group.Name + "' has no Plugins or SpellIDs, skipping it.");
+                    continue;
+                }
+
+                if (group.Members.Count == 0 && group.AlwaysGiven.Count == 0)
+                    Console.WriteLine("[Warning] Spell group '" + group.Name + "' has no Members or AlwaysGiven NPCs, so its spells will not be given to anyone.");
+
+                spellGroups.Add(group);
+            }
 
             foreach (SpellRule rule in ruleList.Rules)
             {
@@ -280,7 +362,7 @@ namespace TrueUnleveledSkyrim.Patch
                     Console.WriteLine("[Warning] Spell rule spell '" + id + "' was not found in the load order.");
             }
 
-            Console.WriteLine("Spell rules: " + compiledRules.Count + " active.");
+            Console.WriteLine("Spell rules: " + compiledRules.Count + " active, " + spellGroups.Count + " spell groups.");
         }
 
         private static bool RuleMatches(SpellRule rule, Npc npc, RuleTraits traits)
@@ -300,12 +382,11 @@ namespace TrueUnleveledSkyrim.Patch
         }
 
         // Combines every rule that matches the NPC, or null if none does.
-        private static NpcSpellRules? ResolveRules(Npc npc, IRaceGetter race, ILinkCache linkCache)
+        private static NpcSpellRules? ResolveRules(Npc npc, RuleTraits traits)
         {
             if (compiledRules.Count == 0)
                 return null;
 
-            RuleTraits traits = new(npc, race, linkCache);
             NpcSpellRules? result = null;
             foreach (CompiledRule rule in compiledRules)
             {
@@ -371,6 +452,7 @@ namespace TrueUnleveledSkyrim.Patch
             cachedSpells.Clear();
             encounterableNpcs.Clear();
             compiledRules.Clear();
+            spellGroups.Clear();
             givenNpcs.Clear();
             npcsGivenSpells = 0;
             spellsGiven = 0;
@@ -446,7 +528,7 @@ namespace TrueUnleveledSkyrim.Patch
                     Element = CustomPerksPatcher.GetSpellElement(spell, Patcher.LinkCache),
                     School = perkData.School,
                     RequiredLevel = perkData.Level,
-                    Theme = GetSpellTheme(spell),
+                    GroupIndices = GetGroupIndices(spell),
                     ExclusiveOnly = !learnableSpellKeys.Contains(spell.FormKey)
                 });
             }
@@ -877,12 +959,14 @@ namespace TrueUnleveledSkyrim.Patch
             if (NpcSkipKeywords.Any(keyword => editorId.Contains(keyword) || npcNameLower.Contains(keyword))) return Skip(npc, "name or EditorID contains a skip word (summon, ghost, spirit, fx, test)");
             if (editorId.Contains("template") || editorId.Contains("dummy") || editorId.Contains("test") || editorId.Contains("preset") || npcNameLower.Contains("preset")) return Skip(npc, "EditorID or name marks it as a template, dummy, test or preset");
 
-            NpcSpellRules? rules = ResolveRules(npc, race, linkCache);
+            RuleTraits? traits = compiledRules.Count > 0 || spellGroups.Count > 0 ? new RuleTraits(npc, race, linkCache) : null;
+            NpcSpellRules? rules = traits is null ? null : ResolveRules(npc, traits);
+            NpcGroupAccess groupAccess = traits is null ? new NpcGroupAccess() : ResolveGroups(npc, traits);
 
             // The regular distribution first, so the spells a rule adds don't change which element or school the NPC counts as.
             bool changed = false;
             if (rules is null || rules.NaturalDistribution)
-                changed |= DistributeRegularSpells(npc, linkCache, race, rules, isRestrictedRace, editorId, npcNameLower);
+                changed |= DistributeRegularSpells(npc, linkCache, race, rules, groupAccess, isRestrictedRace, editorId, npcNameLower);
             else
                 PatchReport.Trace(npc, "Regular spell distribution is turned off by a spell rule");
 
@@ -893,7 +977,7 @@ namespace TrueUnleveledSkyrim.Patch
         }
 
         // The regular distribution: spells that fit the NPC's schools, element, level tier, cast style and magicka.
-        private static bool DistributeRegularSpells(Npc npc, ILinkCache linkCache, IRaceGetter race, NpcSpellRules? rules, bool isRestrictedRace, string editorId, string npcNameLower)
+        private static bool DistributeRegularSpells(Npc npc, ILinkCache linkCache, IRaceGetter race, NpcSpellRules? rules, NpcGroupAccess groupAccess, bool isRestrictedRace, string editorId, string npcNameLower)
         {
             bool isUnique = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
             if (!encounterableNpcs.Contains(npc.FormKey) && !isUnique)
@@ -989,38 +1073,19 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            HashSet<SpellTheme> blockedThemesForThisNpc = new();
-            foreach (var kvp in ThemeBlacklist)
-            {
-                if (editorId.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase) || npcNameLower.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
-                {
-                    foreach (var theme in kvp.Value)
-                        blockedThemesForThisNpc.Add(theme);
-                }
-            }
-
             List<ISpellGetter> spellsToAdd = new();
             bool receivedForcedSpells = false;
 
-            List<SpellTheme> activeForcedThemes = new();
-            if (ThemeOverrides.TryGetValue(editorId, out var directOverrides))
-                activeForcedThemes.AddRange(directOverrides);
-
-            if (editorId.Contains("vampire") && !blockedThemesForThisNpc.Contains(SpellTheme.Vampire) && !activeForcedThemes.Contains(SpellTheme.Vampire))
-                activeForcedThemes.Add(SpellTheme.Vampire);
-
-            if (editorId.Contains("vigilant") && !blockedThemesForThisNpc.Contains(SpellTheme.Holy) && !activeForcedThemes.Contains(SpellTheme.Holy))
-                activeForcedThemes.Add(SpellTheme.Holy);
-
-            // Themed spells for NPCs that are forced into a theme.
-            if (activeForcedThemes.Count > 0)
+            // Spells of the groups this NPC always receives, such as the vampire spells of a vampire.
+            if (groupAccess.Always.Count > 0)
             {
                 foreach (var cachedSpell in cachedSpells)
                 {
                     if (cachedSpell.ExclusiveOnly) continue;
+                    if (!cachedSpell.GroupIndices.Any(index => groupAccess.Always.Contains(index))) continue;
+                    if (!GroupsAllow(cachedSpell, groupAccess)) continue;
                     if (rules is not null && rules.Blocks(cachedSpell.Spell, cachedSpell.Element, cachedSpell.School.ToString())) continue;
                     if (npcKnownSpellKeys.Contains(cachedSpell.FormKey)) continue;
-                    if (blockedThemesForThisNpc.Contains(cachedSpell.Theme)) continue;
                     if (cachedSpell.BaseCost > npcMagicka) continue;
 
                     if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) continue;
@@ -1030,17 +1095,9 @@ namespace TrueUnleveledSkyrim.Patch
 
                     if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) continue;
 
-                    if (ExclusivePluginRules.TryGetValue(cachedSpell.FormKey.ModKey.FileName.String, out var isNpcEligibleForForced))
-                    {
-                        if (!isNpcEligibleForForced(npc)) continue;
-                    }
-
-                    if (activeForcedThemes.Contains(cachedSpell.Theme))
-                    {
-                        spellsToAdd.Add(cachedSpell.Spell);
-                        npcKnownSpellKeys.Add(cachedSpell.FormKey);
-                        receivedForcedSpells = true;
-                    }
+                    spellsToAdd.Add(cachedSpell.Spell);
+                    npcKnownSpellKeys.Add(cachedSpell.FormKey);
+                    receivedForcedSpells = true;
                 }
             }
 
@@ -1117,15 +1174,6 @@ namespace TrueUnleveledSkyrim.Patch
                     }
                 }
 
-                bool isVampireNpc =
-                    (npc.Keywords != null && npc.Keywords.Any(k => k.FormKey == Skyrim.Keyword.Vampire.FormKey)) ||
-                    (npc.Factions != null && npc.Factions.Any(f => f.Faction.FormKey == Skyrim.Faction.VampireFaction.FormKey)) ||
-                    editorId.Contains("vampire");
-
-                bool isHolyNpc =
-                    (npc.Factions != null && npc.Factions.Any(f => f.Faction.FormKey == Skyrim.Faction.VigilantOfStendarrFaction.FormKey)) ||
-                    editorId.Contains("stendarr");
-
                 foreach (var cachedSpell in cachedSpells)
                 {
                     if (cachedSpell.ExclusiveOnly) continue;
@@ -1139,16 +1187,9 @@ namespace TrueUnleveledSkyrim.Patch
 
                     if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) continue;
 
-                    if (ExclusivePluginRules.TryGetValue(cachedSpell.FormKey.ModKey.FileName.String, out var isNpcEligibleForStandard))
-                    {
-                        if (!isNpcEligibleForStandard(npc)) continue;
-                    }
+                    if (!GroupsAllow(cachedSpell, groupAccess)) continue;
 
                     if (cachedSpell.BaseCost > npcMagicka) continue;
-                    if (blockedThemesForThisNpc.Contains(cachedSpell.Theme)) continue;
-
-                    if (cachedSpell.Theme == SpellTheme.Vampire && !isVampireNpc) continue;
-                    if (cachedSpell.Theme == SpellTheme.Holy && !isHolyNpc) continue;
 
                     if (cachedSpell.Element != SpellElement.None && cachedSpell.Element != SpellElement.Mixed)
                     {

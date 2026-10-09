@@ -159,9 +159,52 @@ namespace TrueUnleveledSkyrim.Config
         [JsonProperty] public SpellSelector MustNotReceive { get; set; } = new();
     }
 
+    // Describes a kind of NPC. Every non-empty criterion has to match, and at least one has to be set.
+    public class SpellNpcMatcher
+    {
+        // Any of these in the NPC's EditorID.
+        [JsonProperty] public List<string> EditorIDKeys { get; set; } = new();
+
+        // All of these in the NPC's EditorID.
+        [JsonProperty] public List<string> RequiredEditorIDKeys { get; set; } = new();
+
+        // Any of these in the NPC's name or EditorID.
+        [JsonProperty] public List<string> NameKeys { get; set; } = new();
+
+        // None of these in the NPC's name or EditorID.
+        [JsonProperty] public List<string> ForbiddenKeys { get; set; } = new();
+
+        // Any of these factions (EditorIDs) the NPC is in.
+        [JsonProperty] public List<string> Factions { get; set; } = new();
+
+        // Any of these keywords (EditorIDs) on the NPC or its race.
+        [JsonProperty] public List<string> ActorTypeKeywords { get; set; } = new();
+    }
+
+    // A set of spells (by plugin or EditorID) that only certain NPCs may receive, such as the spells of a vampire magic mod.
+    public class SpellGroup
+    {
+        [JsonProperty] public string Name { get; set; } = string.Empty;
+        [JsonProperty] public bool Enabled { get; set; } = true;
+
+        // Which spells belong to the group: any spell from a plugin whose file name contains one of these, or with one of these EditorIDs.
+        [JsonProperty] public List<string> Plugins { get; set; } = new();
+        [JsonProperty] public List<string> SpellIDs { get; set; } = new();
+
+        // NPCs allowed to receive the group's spells. Nobody else ever gets them through the regular distribution.
+        [JsonProperty] public List<SpellNpcMatcher> Members { get; set; } = new();
+
+        // NPCs that always receive the group's spells (if they fit them), whether or not the regular distribution would pick them. They count as members.
+        [JsonProperty] public List<SpellNpcMatcher> AlwaysGiven { get; set; } = new();
+
+        // NPCs that never receive the group's spells, even if they match Members or AlwaysGiven.
+        [JsonProperty] public List<SpellNpcMatcher> ExcludedNpcs { get; set; } = new();
+    }
+
     public class SpellRuleList : ConfigType
     {
         [JsonProperty] public List<SpellRule> Rules { get; set; } = new();
+        [JsonProperty] public List<SpellGroup> SpellGroups { get; set; } = new();
     }
 
     // raceLevelModifiers.json
