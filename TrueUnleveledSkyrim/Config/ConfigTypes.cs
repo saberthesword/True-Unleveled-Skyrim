@@ -130,6 +130,10 @@ namespace TrueUnleveledSkyrim.Config
         // Parts of plugin file names, e.g. "Venomancy". Compared ignoring case.
         [JsonProperty] public List<string> Plugins { get; set; } = new();
 
+        // Spell keyword EditorIDs, e.g. "MagicDamageFire". A spell matches if the keyword is on the spell or on any of its magic effects.
+        // Handy when a spell has no element assigned, which is the case for custom elements.
+        [JsonProperty] public List<string> Keywords { get; set; } = new();
+
         // Only used by MustNotReceive: Fire, Frost, Shock, Poison, Summoning, Necromancy, Mixed.
         [JsonProperty] public List<string> Elements { get; set; } = new();
 
@@ -151,6 +155,12 @@ namespace TrueUnleveledSkyrim.Config
 
         // Spells the NPC always gets. SpellIDs are given as they are. Spells selected by Plugins still respect the NPC's level and magicka.
         [JsonProperty] public SpellSelector MustReceive { get; set; } = new();
+
+        // If true, the NPC's own school perks (Novice to Master) are trusted and decide its spells: they choose the schools it gets spells
+        // from (even if it knows none yet) and the highest spell tier per school, instead of its level. It then counts as a magic user whatever
+        // its class or combat style says, and unless its name or spells point to one element it may get every element. For followers whose
+        // perks were set up correctly but whose spells were not.
+        [JsonProperty] public bool SpellsFromPerks { get; set; } = false;
 
         // If false, the NPC gets none of the regular distribution, only the MustReceive spells.
         [JsonProperty] public bool NaturalDistribution { get; set; } = true;
@@ -190,6 +200,9 @@ namespace TrueUnleveledSkyrim.Config
         // Which spells belong to the group: any spell from a plugin whose file name contains one of these, or with one of these EditorIDs.
         [JsonProperty] public List<string> Plugins { get; set; } = new();
         [JsonProperty] public List<string> SpellIDs { get; set; } = new();
+
+        // Spell keyword EditorIDs. A spell with any of them (on the spell or on one of its magic effects) belongs to the group.
+        [JsonProperty] public List<string> Keywords { get; set; } = new();
 
         // NPCs allowed to receive the group's spells. Nobody else ever gets them through the regular distribution.
         [JsonProperty] public List<SpellNpcMatcher> Members { get; set; } = new();

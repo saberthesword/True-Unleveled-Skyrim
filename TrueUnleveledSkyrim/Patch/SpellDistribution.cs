@@ -34,6 +34,9 @@ namespace TrueUnleveledSkyrim.Patch
             // Indexes of the spell groups (spellRules.json) the spell belongs to.
             public int[] GroupIndices { get; set; } = Array.Empty<int>();
 
+            // Keyword EditorIDs of the spell and of its magic effects.
+            public HashSet<string> Keywords { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
             // Not learnable from a book, only kept for NPCs covered by a plugin-only rule. Never part of the normal distribution.
             public bool ExclusiveOnly { get; set; }
         }
@@ -85,13 +88,14 @@ namespace TrueUnleveledSkyrim.Patch
             public HashSet<int> Always { get; } = new();
         }
 
-        private static int[] GetGroupIndices(ISpellGetter spell)
+        private static int[] GetGroupIndices(ISpellGetter spell, HashSet<string> keywords)
         {
             List<int> indices = new();
             for (int i = 0; i < spellGroups.Count; i++)
             {
                 SpellGroup group = spellGroups[i];
                 bool inGroup = group.Plugins.Any(snippet => IsFromPlugin(spell, snippet)) ||
+                               group.Keywords.Any(keyword => keywords.Contains(keyword)) ||
                                (spell.EditorID is not null && group.SpellIDs.Any(id => id.Equals(spell.EditorID, StringComparison.OrdinalIgnoreCase)));
                 if (inGroup)
                     indices.Add(i);
@@ -188,18 +192,23 @@ namespace TrueUnleveledSkyrim.Patch
         {
             public List<CompiledRule> Rules { get; } = new();
             public bool NaturalDistribution { get; set; } = true;
+            public bool SpellsFromPerks { get; set; }
             public HashSet<string> BlockedIDs { get; } = new(StringComparer.OrdinalIgnoreCase);
             public List<string> BlockedPlugins { get; } = new();
+            public HashSet<string> BlockedKeywords { get; } = new(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> BlockedElements { get; } = new(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> BlockedSchools { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-            public bool Blocks(ISpellGetter spell, SpellElement element, string? school)
+            public bool Blocks(ISpellGetter spell, SpellElement element, string? school, HashSet<string> keywords)
             {
                 if (spell.EditorID is not null && BlockedIDs.Contains(spell.EditorID)) return true;
                 if (BlockedPlugins.Any(snippet => IsFromPlugin(spell, snippet))) return true;
                 if (BlockedElements.Contains(element.ToString())) return true;
+                if (BlockedKeywords.Count > 0 && keywords.Any(keyword => BlockedKeywords.Contains(keyword))) return true;
                 return school is not null && BlockedSchools.Contains(school);
             }
+
+            public bool Blocks(CachedSpell spell) => Blocks(spell.Spell, spell.Element, spell.School.ToString(), spell.Keywords);
         }
 
         // Keywords and factions of an NPC, only collected if a rule asks for them.
@@ -259,11 +268,25 @@ namespace TrueUnleveledSkyrim.Patch
             return spell.FormKey.ModKey.FileName.String.Contains(pluginSnippet, StringComparison.OrdinalIgnoreCase);
         }
 
-        // Spells of these plugins are kept even if they can't be learned from a book, so rules can hand them out. They are
-        // marked ExclusiveOnly and never take part in the regular distribution.
+        // Spells a rule selects by plugin or keyword are kept even if they can't be learned from a book, so the rule can hand them
+        // out. They are marked ExclusiveOnly and never take part in the regular distribution.
         private static bool IsRulePluginSpell(ISpellGetter spell)
         {
-            return compiledRules.Any(rule => rule.Definition.MustReceive.Plugins.Any(snippet => IsFromPlugin(spell, snippet)));
+            foreach (CompiledRule rule in compiledRules)
+            {
+                SpellSelector mustReceive = rule.Definition.MustReceive;
+                if (mustReceive.Plugins.Any(snippet => IsFromPlugin(spell, snippet)))
+                    return true;
+
+                if (mustReceive.Keywords.Count > 0)
+                {
+                    HashSet<string> keywords = CustomPerksPatcher.GetSpellKeywords(spell, Patcher.LinkCache);
+                    if (mustReceive.Keywords.Any(keyword => keywords.Contains(keyword)))
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         private static string? GetSchoolName(ISpellGetter spell)
@@ -281,6 +304,7 @@ namespace TrueUnleveledSkyrim.Patch
             selector ??= new SpellSelector();
             selector.SpellIDs = CleanList(selector.SpellIDs);
             selector.Plugins = CleanList(selector.Plugins);
+            selector.Keywords = CleanList(selector.Keywords);
             selector.Elements = CleanList(selector.Elements);
             selector.Schools = CleanList(selector.Schools);
             return selector;
@@ -304,13 +328,14 @@ namespace TrueUnleveledSkyrim.Patch
 
                 group.Plugins = CleanList(group.Plugins);
                 group.SpellIDs = CleanList(group.SpellIDs);
+                group.Keywords = CleanList(group.Keywords);
                 group.Members = CleanMatchers(group.Members);
                 group.AlwaysGiven = CleanMatchers(group.AlwaysGiven);
                 group.ExcludedNpcs = CleanMatchers(group.ExcludedNpcs);
 
-                if (group.Plugins.Count == 0 && group.SpellIDs.Count == 0)
+                if (group.Plugins.Count == 0 && group.SpellIDs.Count == 0 && group.Keywords.Count == 0)
                 {
-                    Console.WriteLine("[Warning] Spell group '" + group.Name + "' has no Plugins or SpellIDs, skipping it.");
+                    Console.WriteLine("[Warning] Spell group '" + group.Name + "' has no Plugins, SpellIDs or Keywords, skipping it.");
                     continue;
                 }
 
@@ -397,9 +422,12 @@ namespace TrueUnleveledSkyrim.Patch
                 result.Rules.Add(rule);
                 if (!rule.Definition.NaturalDistribution)
                     result.NaturalDistribution = false;
+                if (rule.Definition.SpellsFromPerks)
+                    result.SpellsFromPerks = true;
 
                 result.BlockedIDs.UnionWith(rule.Definition.MustNotReceive.SpellIDs);
                 result.BlockedPlugins.AddRange(rule.Definition.MustNotReceive.Plugins);
+                result.BlockedKeywords.UnionWith(rule.Definition.MustNotReceive.Keywords);
                 result.BlockedElements.UnionWith(rule.Definition.MustNotReceive.Elements);
                 result.BlockedSchools.UnionWith(rule.Definition.MustNotReceive.Schools);
 
@@ -444,6 +472,10 @@ namespace TrueUnleveledSkyrim.Patch
         private static readonly List<CachedSpell> cachedSpells = new();
         private static readonly HashSet<FormKey> encounterableNpcs = new();
         private static readonly HashSet<FormKey> givenNpcs = new();
+
+        // The blacklist settings. Spells in here are never given to anyone, not even by a spell rule that names them.
+        private static readonly HashSet<FormKey> globallyBlockedSpells = new();
+        private static readonly HashSet<ModKey> globallyBlockedPlugins = new();
         private static int npcsGivenSpells;
         private static int spellsGiven;
 
@@ -454,6 +486,8 @@ namespace TrueUnleveledSkyrim.Patch
             compiledRules.Clear();
             spellGroups.Clear();
             givenNpcs.Clear();
+            globallyBlockedSpells.Clear();
+            globallyBlockedPlugins.Clear();
             npcsGivenSpells = 0;
             spellsGiven = 0;
         }
@@ -491,7 +525,8 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            HashSet<FormKey> blacklistedSpellKeys = settings.BlacklistedSpells.Select(link => link.FormKey).ToHashSet();
+            globallyBlockedSpells.UnionWith(settings.BlacklistedSpells.Select(link => link.FormKey));
+            globallyBlockedPlugins.UnionWith(settings.BlacklistedSpellPlugins);
 
             // Only spells the player can learn from a book are handed out.
             HashSet<FormKey> learnableSpellKeys = new();
@@ -512,13 +547,14 @@ namespace TrueUnleveledSkyrim.Patch
                      s.EquipmentType.FormKey == Skyrim.EquipType.LeftHand.FormKey ||
                      s.EquipmentType.FormKey == Skyrim.EquipType.RightHand.FormKey) &&
                     (learnableSpellKeys.Contains(s.FormKey) || IsRulePluginSpell(s)) &&
-                    !settings.BlacklistedSpellPlugins.Contains(s.FormKey.ModKey) &&
-                    !blacklistedSpellKeys.Contains(s.FormKey) &&
+                    !globallyBlockedPlugins.Contains(s.FormKey.ModKey) &&
+                    !globallyBlockedSpells.Contains(s.FormKey) &&
                     !IsTiedToUniqueEntityOrLocation(s, state.LinkCache));
 
             foreach (var spell in rawSpells)
             {
                 var perkData = PerkMap[spell.HalfCostPerk!.FormKey];
+                HashSet<string> spellKeywords = CustomPerksPatcher.GetSpellKeywords(spell, Patcher.LinkCache);
 
                 cachedSpells.Add(new CachedSpell
                 {
@@ -528,7 +564,8 @@ namespace TrueUnleveledSkyrim.Patch
                     Element = CustomPerksPatcher.GetSpellElement(spell, Patcher.LinkCache),
                     School = perkData.School,
                     RequiredLevel = perkData.Level,
-                    GroupIndices = GetGroupIndices(spell),
+                    GroupIndices = GetGroupIndices(spell, spellKeywords),
+                    Keywords = spellKeywords,
                     ExclusiveOnly = !learnableSpellKeys.Contains(spell.FormKey)
                 });
             }
@@ -885,7 +922,13 @@ namespace TrueUnleveledSkyrim.Patch
                 {
                     if (knownSpellKeys.Contains(spell.FormKey) || chosen.Contains(spell.FormKey)) continue;
 
-                    if (rules.Blocks(spell, CustomPerksPatcher.GetSpellElement(spell, linkCache), GetSchoolName(spell)))
+                    if (globallyBlockedSpells.Contains(spell.FormKey) || globallyBlockedPlugins.Contains(spell.FormKey.ModKey))
+                    {
+                        PatchReport.Trace(npc, "Spell rule '" + rule.Definition.Name + "': " + spell.EditorID + " not given, it is on the spell blacklist");
+                        continue;
+                    }
+
+                    if (rules.Blocks(spell, CustomPerksPatcher.GetSpellElement(spell, linkCache), GetSchoolName(spell), CustomPerksPatcher.GetSpellKeywords(spell, linkCache)))
                     {
                         PatchReport.Trace(npc, "Spell rule '" + rule.Definition.Name + "': " + spell.EditorID + " not given, a rule forbids it");
                         continue;
@@ -902,15 +945,17 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            // Spells selected by plugin.
+            // Spells selected by plugin or keyword.
             List<string> mustPlugins = rules.Rules.SelectMany(rule => rule.Definition.MustReceive.Plugins).ToList();
-            if (mustPlugins.Count > 0)
+            List<string> mustKeywords = rules.Rules.SelectMany(rule => rule.Definition.MustReceive.Keywords).ToList();
+            if (mustPlugins.Count > 0 || mustKeywords.Count > 0)
             {
                 foreach (CachedSpell cachedSpell in cachedSpells)
                 {
-                    if (!mustPlugins.Any(snippet => IsFromPlugin(cachedSpell.Spell, snippet))) continue;
+                    if (!mustPlugins.Any(snippet => IsFromPlugin(cachedSpell.Spell, snippet)) &&
+                        !mustKeywords.Any(keyword => cachedSpell.Keywords.Contains(keyword))) continue;
                     if (knownSpellKeys.Contains(cachedSpell.FormKey) || chosen.Contains(cachedSpell.FormKey)) continue;
-                    if (rules.Blocks(cachedSpell.Spell, cachedSpell.Element, cachedSpell.School.ToString())) continue;
+                    if (rules.Blocks(cachedSpell)) continue;
                     if (cachedSpell.RequiredLevel > tierCap) continue;
                     if (cachedSpell.BaseCost > npcMagicka) continue;
 
@@ -1008,6 +1053,7 @@ namespace TrueUnleveledSkyrim.Patch
             // Track highest known tier per unique element combo
             Dictionary<(MagicSchool School, SpellElement Element), PerkLevel> highestKnownSpellLevelsElement = new();
 
+            bool spellsFromPerks = rules is not null && rules.SpellsFromPerks;
             var allowedCastTypes = new HashSet<CastType>();
             var allowedTargetTypes = new HashSet<TargetType>();
             float maxAllowedCastTime = 1.0f;
@@ -1058,6 +1104,28 @@ namespace TrueUnleveledSkyrim.Patch
             HashSet<MagicSchool> allowedSchools = new();
             var highestPerks = DetermineHighestPerks(npc);
 
+            // Spells from perks: the NPC's school perks are trusted, so they decide the schools it gets spells from, even if it knows none yet.
+            if (spellsFromPerks)
+            {
+                foreach (MagicSchool perkSchool in highestPerks.Keys)
+                    allowedSchools.Add(perkSchool);
+
+                if (highestPerks.Count > 0)
+                    isMagicUser = true;
+
+                // Normal humanoid casting works for an NPC that has no vanilla spells to copy the cast styles from.
+                if (!isRestrictedRace)
+                {
+                    allowedCastTypes.Add(CastType.FireAndForget);
+                    allowedTargetTypes.Add(TargetType.Self);
+                    allowedTargetTypes.Add(TargetType.Touch);
+                    allowedTargetTypes.Add(TargetType.Aimed);
+                    allowedTargetTypes.Add(TargetType.TargetActor);
+                }
+
+                PatchReport.Add(npc, "Spells follow the NPC's perks: " + (highestPerks.Count == 0 ? "no school perks found" : string.Join(", ", highestPerks.Select(perk => perk.Key + " " + perk.Value))));
+            }
+
             if (npcArchetype == SpellElement.Necromancy || npcArchetype == SpellElement.Summoning)
                 allowedSchools.Add(MagicSchool.Conjuration);
 
@@ -1084,7 +1152,7 @@ namespace TrueUnleveledSkyrim.Patch
                     if (cachedSpell.ExclusiveOnly) continue;
                     if (!cachedSpell.GroupIndices.Any(index => groupAccess.Always.Contains(index))) continue;
                     if (!GroupsAllow(cachedSpell, groupAccess)) continue;
-                    if (rules is not null && rules.Blocks(cachedSpell.Spell, cachedSpell.Element, cachedSpell.School.ToString())) continue;
+                    if (rules is not null && rules.Blocks(cachedSpell)) continue;
                     if (npcKnownSpellKeys.Contains(cachedSpell.FormKey)) continue;
                     if (cachedSpell.BaseCost > npcMagicka) continue;
 
@@ -1102,7 +1170,7 @@ namespace TrueUnleveledSkyrim.Patch
             }
 
             // Pure melee and ranged NPCs don't get spells.
-            if (npc.Class.TryResolve(linkCache, out var npcClass))
+            if (!spellsFromPerks && npc.Class.TryResolve(linkCache, out var npcClass))
             {
                 string classId = npcClass.EditorID?.ToLowerInvariant() ?? "";
                 if (classId.Contains("archer") || classId.Contains("warrior") || classId.Contains("melee") ||
@@ -1116,7 +1184,7 @@ namespace TrueUnleveledSkyrim.Patch
 
             // Resolved through the read-only view, the same way the original spell patcher did it.
             INpcGetter npcView = npc;
-            if (npcView.CombatStyle.TryResolve(linkCache, out var combatStyle))
+            if (!spellsFromPerks && npcView.CombatStyle.TryResolve(linkCache, out var combatStyle))
             {
                 string styleId = combatStyle.EditorID?.ToLowerInvariant() ?? "";
                 if (styleId.Contains("archer") || styleId.Contains("warrior") || styleId.Contains("melee") ||
@@ -1145,7 +1213,10 @@ namespace TrueUnleveledSkyrim.Patch
                     npcArchetype = SpellElement.Mixed;
                 }
 
-                PerkLevel levelBasedFloor = GetLevelTier(npcLevel);
+                // An NPC whose perks are trusted is limited by those perks, not by its level, and may get every element
+                // unless its name or spells point to one.
+                bool elementsUnrestricted = spellsFromPerks && npcArchetype == SpellElement.None;
+                PerkLevel levelBasedFloor = spellsFromPerks ? PerkLevel.None : GetLevelTier(npcLevel);
 
                 // The highest spell tier the NPC may receive per school and element.
                 Dictionary<(MagicSchool School, SpellElement Element), PerkLevel> effectiveElementLevels = new();
@@ -1170,14 +1241,14 @@ namespace TrueUnleveledSkyrim.Patch
                     foreach (SpellElement element in elementsToEvaluate)
                     {
                         highestKnownSpellLevelsElement.TryGetValue((school, element), out var elementSpellLevel);
-                        effectiveElementLevels[(school, element)] = npcArchetype == element ? (PerkLevel)generalMax : elementSpellLevel;
+                        effectiveElementLevels[(school, element)] = npcArchetype == element || elementsUnrestricted ? (PerkLevel)generalMax : elementSpellLevel;
                     }
                 }
 
                 foreach (var cachedSpell in cachedSpells)
                 {
                     if (cachedSpell.ExclusiveOnly) continue;
-                    if (rules is not null && rules.Blocks(cachedSpell.Spell, cachedSpell.Element, cachedSpell.School.ToString())) continue;
+                    if (rules is not null && rules.Blocks(cachedSpell)) continue;
                     if (npcKnownSpellKeys.Contains(cachedSpell.FormKey)) continue;
 
                     if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) continue;
@@ -1193,7 +1264,7 @@ namespace TrueUnleveledSkyrim.Patch
 
                     if (cachedSpell.Element != SpellElement.None && cachedSpell.Element != SpellElement.Mixed)
                     {
-                        if (npcArchetype != SpellElement.Mixed && npcArchetype != cachedSpell.Element) continue;
+                        if (!elementsUnrestricted && npcArchetype != SpellElement.Mixed && npcArchetype != cachedSpell.Element) continue;
                     }
 
                     if (!allowedSchools.Contains(cachedSpell.School)) continue;

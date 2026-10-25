@@ -355,6 +355,12 @@ namespace TrueUnleveledSkyrim.Patch
             return GetSpellInfo(spell, linkCache).Element;
         }
 
+        // The keyword EditorIDs of a spell: the ones on the spell record and the ones on its magic effects.
+        public static HashSet<string> GetSpellKeywords(ISpellGetter spell, ILinkCache linkCache)
+        {
+            return GetSpellInfo(spell, linkCache).Keywords;
+        }
+
         // Keywords, schools and element of a spell's effects. Cached because the same spells are shared by many NPCs.
         private static SpellInfo GetSpellInfo(ISpellGetter spell, ILinkCache linkCache)
         {
