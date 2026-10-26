@@ -149,7 +149,7 @@ namespace TrueUnleveledSkyrim.Config
 
 
         [Tooltip("These specific spells are never given to NPCs.")]
-        public List<FormLink<ISpellGetter>> BlacklistedSpells { get; set; } = new();
+        public List<string> BlacklistedSpells { get; set; } = new();
     }
 
     public class TUSConfig_Morrowloot
@@ -177,4 +177,4 @@ namespace TrueUnleveledSkyrim.Config
         [Tooltip("If enabled, tempering is made about 40% less effective across the board for balancing reasons, making way for the artifacts to shine without Smithing being mandatory.")]
         public bool TemperingDebuff { get; set; } = true;
     }
-}
+}
