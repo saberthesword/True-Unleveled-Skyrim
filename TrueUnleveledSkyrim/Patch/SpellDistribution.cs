@@ -193,19 +193,24 @@ namespace TrueUnleveledSkyrim.Patch
             public List<CompiledRule> Rules { get; } = new();
             public bool NaturalDistribution { get; set; } = true;
             public bool SpellsFromPerks { get; set; }
-            public HashSet<string> BlockedIDs { get; } = new(StringComparer.OrdinalIgnoreCase);
-            public List<string> BlockedPlugins { get; } = new();
-            public HashSet<string> BlockedKeywords { get; } = new(StringComparer.OrdinalIgnoreCase);
-            public HashSet<string> BlockedElements { get; } = new(StringComparer.OrdinalIgnoreCase);
-            public HashSet<string> BlockedSchools { get; } = new(StringComparer.OrdinalIgnoreCase);
+            // The must-not-receive selectors of every matching rule. Each keeps its own exception.
+            public List<SpellBlockSelector> Blocking { get; } = new();
 
             public bool Blocks(ISpellGetter spell, SpellElement element, string? school, HashSet<string> keywords)
             {
-                if (spell.EditorID is not null && BlockedIDs.Contains(spell.EditorID)) return true;
-                if (BlockedPlugins.Any(snippet => IsFromPlugin(spell, snippet))) return true;
-                if (BlockedElements.Contains(element.ToString())) return true;
-                if (BlockedKeywords.Count > 0 && keywords.Any(keyword => BlockedKeywords.Contains(keyword))) return true;
-                return school is not null && BlockedSchools.Contains(school);
+                foreach (SpellBlockSelector block in Blocking)
+                {
+                    if (!SelectorMatches(block, spell, element, school, keywords))
+                        continue;
+
+                    // A spell that also matches the exception is not blocked by this rule.
+                    if (SelectorMatches(block.Except, spell, element, school, keywords))
+                        continue;
+
+                    return true;
+                }
+
+                return false;
             }
 
             public bool Blocks(CachedSpell spell) => Blocks(spell.Spell, spell.Element, spell.School.ToString(), spell.Keywords);
@@ -289,6 +294,24 @@ namespace TrueUnleveledSkyrim.Patch
             return false;
         }
 
+        // True if the spell is picked by any part of the selector. An empty selector matches nothing.
+        private static bool SelectorMatches(SpellSelector selector, ISpellGetter spell, SpellElement element, string? school, HashSet<string> keywords)
+        {
+            if (spell.EditorID is not null && selector.SpellIDs.Any(id => id.Equals(spell.EditorID, StringComparison.OrdinalIgnoreCase))) return true;
+            if (selector.Plugins.Any(snippet => IsFromPlugin(spell, snippet))) return true;
+            if (selector.Keywords.Any(keyword => keywords.Contains(keyword))) return true;
+            if (selector.Elements.Any(name => name.Equals(element.ToString(), StringComparison.OrdinalIgnoreCase))) return true;
+            return school is not null && selector.Schools.Any(name => name.Equals(school, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static SpellBlockSelector CleanBlockSelector(SpellBlockSelector? selector)
+        {
+            selector ??= new SpellBlockSelector();
+            CleanSelector(selector);
+            selector.Except = CleanSelector(selector.Except);
+            return selector;
+        }
+
         private static string? GetSchoolName(ISpellGetter spell)
         {
             return spell.HalfCostPerk != null && PerkMap.TryGetValue(spell.HalfCostPerk.FormKey, out var perkInfo) ? perkInfo.School.ToString() : null;
@@ -355,7 +378,7 @@ namespace TrueUnleveledSkyrim.Patch
                 rule.Factions = CleanList(rule.Factions);
                 rule.ActorTypeKeywords = CleanList(rule.ActorTypeKeywords);
                 rule.MustReceive = CleanSelector(rule.MustReceive);
-                rule.MustNotReceive = CleanSelector(rule.MustNotReceive);
+                rule.MustNotReceive = CleanBlockSelector(rule.MustNotReceive);
 
                 if (rule.NameKeys.Count == 0 && rule.Factions.Count == 0 && rule.ActorTypeKeywords.Count == 0)
                 {
@@ -425,11 +448,7 @@ namespace TrueUnleveledSkyrim.Patch
                 if (rule.Definition.SpellsFromPerks)
                     result.SpellsFromPerks = true;
 
-                result.BlockedIDs.UnionWith(rule.Definition.MustNotReceive.SpellIDs);
-                result.BlockedPlugins.AddRange(rule.Definition.MustNotReceive.Plugins);
-                result.BlockedKeywords.UnionWith(rule.Definition.MustNotReceive.Keywords);
-                result.BlockedElements.UnionWith(rule.Definition.MustNotReceive.Elements);
-                result.BlockedSchools.UnionWith(rule.Definition.MustNotReceive.Schools);
+                result.Blocking.Add(rule.Definition.MustNotReceive);
 
                 PatchReport.Add(npc, "Spell rule applies: " + rule.Definition.Name);
             }
@@ -474,8 +493,16 @@ namespace TrueUnleveledSkyrim.Patch
         private static readonly HashSet<FormKey> givenNpcs = new();
 
         // The blacklist settings. Spells in here are never given to anyone, not even by a spell rule that names them.
-        private static readonly HashSet<FormKey> globallyBlockedSpells = new();
+        private static readonly HashSet<string> globallyBlockedSpells = new(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<ModKey> globallyBlockedPlugins = new();
+
+        // A spell is blacklisted by its plugin, its EditorID, or its FormKey written as text (like 012345:Skyrim.esm).
+        private static bool IsGloballyBlocked(ISpellGetter spell)
+        {
+            return globallyBlockedPlugins.Contains(spell.FormKey.ModKey) ||
+                   (spell.EditorID is not null && globallyBlockedSpells.Contains(spell.EditorID)) ||
+                   globallyBlockedSpells.Contains(spell.FormKey.ToString());
+        }
         private static int npcsGivenSpells;
         private static int spellsGiven;
 
@@ -525,7 +552,7 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            globallyBlockedSpells.UnionWith(settings.BlacklistedSpells.Select(link => link.FormKey));
+            globallyBlockedSpells.UnionWith(settings.BlacklistedSpells.Where(entry => !string.IsNullOrWhiteSpace(entry)).Select(entry => entry.Trim()));
             globallyBlockedPlugins.UnionWith(settings.BlacklistedSpellPlugins);
 
             // Only spells the player can learn from a book are handed out.
@@ -547,8 +574,7 @@ namespace TrueUnleveledSkyrim.Patch
                      s.EquipmentType.FormKey == Skyrim.EquipType.LeftHand.FormKey ||
                      s.EquipmentType.FormKey == Skyrim.EquipType.RightHand.FormKey) &&
                     (learnableSpellKeys.Contains(s.FormKey) || IsRulePluginSpell(s)) &&
-                    !globallyBlockedPlugins.Contains(s.FormKey.ModKey) &&
-                    !globallyBlockedSpells.Contains(s.FormKey) &&
+                    !IsGloballyBlocked(s) &&
                     !IsTiedToUniqueEntityOrLocation(s, state.LinkCache));
 
             foreach (var spell in rawSpells)
@@ -922,7 +948,7 @@ namespace TrueUnleveledSkyrim.Patch
                 {
                     if (knownSpellKeys.Contains(spell.FormKey) || chosen.Contains(spell.FormKey)) continue;
 
-                    if (globallyBlockedSpells.Contains(spell.FormKey) || globallyBlockedPlugins.Contains(spell.FormKey.ModKey))
+                    if (IsGloballyBlocked(spell))
                     {
                         PatchReport.Trace(npc, "Spell rule '" + rule.Definition.Name + "': " + spell.EditorID + " not given, it is on the spell blacklist");
                         continue;

@@ -141,6 +141,14 @@ namespace TrueUnleveledSkyrim.Config
         [JsonProperty] public List<string> Schools { get; set; } = new();
     }
 
+    // What a rule forbids: anything that matches is never given, unless it also matches Except.
+    public class SpellBlockSelector : SpellSelector
+    {
+        // Spells matching this are exempt from the block. For example, block the keyword MagicSummonFamiliar except for spells that
+        // also have MagicSummonUndead.
+        [JsonProperty] public SpellSelector Except { get; set; } = new();
+    }
+
     public class SpellRule
     {
         [JsonProperty] public string Name { get; set; } = string.Empty;
@@ -165,8 +173,8 @@ namespace TrueUnleveledSkyrim.Config
         // If false, the NPC gets none of the regular distribution, only the MustReceive spells.
         [JsonProperty] public bool NaturalDistribution { get; set; } = true;
 
-        // Spells the NPC never gets, from any source. Wins over MustReceive.
-        [JsonProperty] public SpellSelector MustNotReceive { get; set; } = new();
+        // Spells the NPC never gets, from any source, except the ones that match the selector's Except part. Wins over MustReceive.
+        [JsonProperty] public SpellBlockSelector MustNotReceive { get; set; } = new();
     }
 
     // Describes a kind of NPC. Every non-empty criterion has to match, and at least one has to be set.
