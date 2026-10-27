@@ -104,12 +104,34 @@ namespace TrueUnleveledSkyrim.Patch
             return indices.ToArray();
         }
 
+        private static readonly Dictionary<string, Regex> patternCache = new(StringComparer.Ordinal);
+
+        private static Regex GetPattern(string pattern)
+        {
+            if (!patternCache.TryGetValue(pattern, out Regex? regex))
+            {
+                regex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                patternCache[pattern] = regex;
+            }
+
+            return regex;
+        }
+
+        private static bool HasNpcCriteria(SpellNpcMatcher matcher)
+        {
+            return matcher.EditorIDKeys.Count + matcher.RequiredEditorIDKeys.Count + matcher.EditorIDPatterns.Count +
+                   matcher.NameKeys.Count + matcher.NpcPlugins.Count + matcher.Factions.Count + matcher.ActorTypeKeywords.Count > 0;
+        }
+
         private static bool MatcherMatches(SpellNpcMatcher matcher, Npc npc, RuleTraits traits)
         {
-            bool hasCriteria = matcher.EditorIDKeys.Count + matcher.RequiredEditorIDKeys.Count + matcher.NameKeys.Count +
-                               matcher.Factions.Count + matcher.ActorTypeKeywords.Count > 0;
-            if (!hasCriteria)
+            if (!HasNpcCriteria(matcher))
                 return false;
+
+            // The plugin that created the NPC.
+            string npcPlugin = npc.FormKey.ModKey.FileName.String;
+            if (matcher.NpcPlugins.Count > 0 && !matcher.NpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase))) return false;
+            if (matcher.ForbiddenNpcPlugins.Count > 0 && matcher.ForbiddenNpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase))) return false;
 
             string? name = npc.Name?.String;
             string? editorId = npc.EditorID;
@@ -119,6 +141,7 @@ namespace TrueUnleveledSkyrim.Patch
 
             if (matcher.EditorIDKeys.Count > 0 && !matcher.EditorIDKeys.Any(InEditorId)) return false;
             if (matcher.RequiredEditorIDKeys.Count > 0 && !matcher.RequiredEditorIDKeys.All(InEditorId)) return false;
+            if (matcher.EditorIDPatterns.Count > 0 && (editorId is null || !matcher.EditorIDPatterns.Any(pattern => GetPattern(pattern).IsMatch(editorId)))) return false;
             if (matcher.NameKeys.Count > 0 && !matcher.NameKeys.Any(InNameOrEditorId)) return false;
             if (matcher.ForbiddenKeys.Count > 0 && matcher.ForbiddenKeys.Any(InNameOrEditorId)) return false;
             if (matcher.ActorTypeKeywords.Count > 0 && !matcher.ActorTypeKeywords.Any(keyword => traits.Keywords.Contains(keyword))) return false;
@@ -153,7 +176,36 @@ namespace TrueUnleveledSkyrim.Patch
             return spell.GroupIndices.All(index => access.Members.Contains(index));
         }
 
-        private static List<SpellNpcMatcher> CleanMatchers(List<SpellNpcMatcher>? matchers)
+        // Cleans the lists of a matcher and drops regular expressions that don't compile, with a warning.
+        private static void CleanMatcher(SpellNpcMatcher matcher, string owner)
+        {
+            matcher.EditorIDKeys = CleanList(matcher.EditorIDKeys);
+            matcher.RequiredEditorIDKeys = CleanList(matcher.RequiredEditorIDKeys);
+            matcher.NameKeys = CleanList(matcher.NameKeys);
+            matcher.ForbiddenKeys = CleanList(matcher.ForbiddenKeys);
+            matcher.NpcPlugins = CleanList(matcher.NpcPlugins);
+            matcher.ForbiddenNpcPlugins = CleanList(matcher.ForbiddenNpcPlugins);
+            matcher.Factions = CleanList(matcher.Factions);
+            matcher.ActorTypeKeywords = CleanList(matcher.ActorTypeKeywords);
+
+            List<string> validPatterns = new();
+            foreach (string pattern in CleanList(matcher.EditorIDPatterns))
+            {
+                try
+                {
+                    GetPattern(pattern);
+                    validPatterns.Add(pattern);
+                }
+                catch (ArgumentException ex)
+                {
+                    Console.WriteLine("[Warning] " + owner + ": the EditorID pattern '" + pattern + "' is not a valid regular expression and is ignored (" + ex.Message + "). Remember that a backslash has to be written twice in JSON.");
+                }
+            }
+
+            matcher.EditorIDPatterns = validPatterns;
+        }
+
+        private static List<SpellNpcMatcher> CleanMatchers(List<SpellNpcMatcher>? matchers, string owner)
         {
             List<SpellNpcMatcher> cleaned = new();
             foreach (SpellNpcMatcher matcher in matchers ?? new List<SpellNpcMatcher>())
@@ -161,12 +213,7 @@ namespace TrueUnleveledSkyrim.Patch
                 if (matcher is null)
                     continue;
 
-                matcher.EditorIDKeys = CleanList(matcher.EditorIDKeys);
-                matcher.RequiredEditorIDKeys = CleanList(matcher.RequiredEditorIDKeys);
-                matcher.NameKeys = CleanList(matcher.NameKeys);
-                matcher.ForbiddenKeys = CleanList(matcher.ForbiddenKeys);
-                matcher.Factions = CleanList(matcher.Factions);
-                matcher.ActorTypeKeywords = CleanList(matcher.ActorTypeKeywords);
+                CleanMatcher(matcher, owner);
                 cleaned.Add(matcher);
             }
 
@@ -352,9 +399,9 @@ namespace TrueUnleveledSkyrim.Patch
                 group.Plugins = CleanList(group.Plugins);
                 group.SpellIDs = CleanList(group.SpellIDs);
                 group.Keywords = CleanList(group.Keywords);
-                group.Members = CleanMatchers(group.Members);
-                group.AlwaysGiven = CleanMatchers(group.AlwaysGiven);
-                group.ExcludedNpcs = CleanMatchers(group.ExcludedNpcs);
+                group.Members = CleanMatchers(group.Members, "Spell group '" + group.Name + "'");
+                group.AlwaysGiven = CleanMatchers(group.AlwaysGiven, "Spell group '" + group.Name + "'");
+                group.ExcludedNpcs = CleanMatchers(group.ExcludedNpcs, "Spell group '" + group.Name + "'");
 
                 if (group.Plugins.Count == 0 && group.SpellIDs.Count == 0 && group.Keywords.Count == 0)
                 {
@@ -373,16 +420,13 @@ namespace TrueUnleveledSkyrim.Patch
                 if (!rule.Enabled)
                     continue;
 
-                rule.NameKeys = CleanList(rule.NameKeys);
-                rule.ForbiddenKeys = CleanList(rule.ForbiddenKeys);
-                rule.Factions = CleanList(rule.Factions);
-                rule.ActorTypeKeywords = CleanList(rule.ActorTypeKeywords);
+                CleanMatcher(rule, "Spell rule '" + rule.Name + "'");
                 rule.MustReceive = CleanSelector(rule.MustReceive);
                 rule.MustNotReceive = CleanBlockSelector(rule.MustNotReceive);
 
-                if (rule.NameKeys.Count == 0 && rule.Factions.Count == 0 && rule.ActorTypeKeywords.Count == 0)
+                if (!HasNpcCriteria(rule))
                 {
-                    Console.WriteLine("[Warning] Spell rule '" + rule.Name + "' has no NPC criteria (NameKeys, Factions or ActorTypeKeywords), skipping it so it doesn't apply to every NPC.");
+                    Console.WriteLine("[Warning] Spell rule '" + rule.Name + "' has no NPC criteria (EditorIDKeys, RequiredEditorIDKeys, EditorIDPatterns, NameKeys, NpcPlugins, Factions or ActorTypeKeywords), skipping it so it doesn't apply to every NPC.");
                     continue;
                 }
 
@@ -415,18 +459,7 @@ namespace TrueUnleveledSkyrim.Patch
 
         private static bool RuleMatches(SpellRule rule, Npc npc, RuleTraits traits)
         {
-            string? name = npc.Name?.String;
-
-            bool ContainsKey(string key) =>
-                (name?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (npc.EditorID?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false);
-
-            if (rule.NameKeys.Count > 0 && !rule.NameKeys.Any(ContainsKey)) return false;
-            if (rule.ForbiddenKeys.Count > 0 && rule.ForbiddenKeys.Any(ContainsKey)) return false;
-            if (rule.ActorTypeKeywords.Count > 0 && !rule.ActorTypeKeywords.Any(keyword => traits.Keywords.Contains(keyword))) return false;
-            if (rule.Factions.Count > 0 && !rule.Factions.Any(faction => traits.Factions.Contains(faction))) return false;
-
-            return true;
+            return MatcherMatches(rule, npc, traits);
         }
 
         // Combines every rule that matches the NPC, or null if none does.
@@ -1012,7 +1045,7 @@ namespace TrueUnleveledSkyrim.Patch
 
             if (npc.IsDeleted) return Skip(npc, "deleted record");
             if (npc.FormKey == Skyrim.Npc.Player.FormKey) return false;
-            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList)) return Skip(npc, "inherits its template's spell list");
+            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList)) return Skip(npc, "inherits its template's spell list (a rule has to match the template record itself, not the NPCs that inherit from it)");
 
             if (!npc.Race.TryResolve(linkCache, out var race)) return Skip(npc, "race not found");
             if (race.Flags.HasFlag(Race.Flag.Child)) return Skip(npc, "child race");
@@ -1027,12 +1060,17 @@ namespace TrueUnleveledSkyrim.Patch
             string editorId = npc.EditorID?.ToLowerInvariant() ?? "";
             string npcNameLower = npc.Name?.String?.ToLowerInvariant() ?? "";
 
-            if (NpcSkipKeywords.Any(keyword => editorId.Contains(keyword) || npcNameLower.Contains(keyword))) return Skip(npc, "name or EditorID contains a skip word (summon, ghost, spirit, fx, test)");
-            if (editorId.Contains("template") || editorId.Contains("dummy") || editorId.Contains("test") || editorId.Contains("preset") || npcNameLower.Contains("preset")) return Skip(npc, "EditorID or name marks it as a template, dummy, test or preset");
-
             RuleTraits? traits = compiledRules.Count > 0 || spellGroups.Count > 0 ? new RuleTraits(npc, race, linkCache) : null;
             NpcSpellRules? rules = traits is null ? null : ResolveRules(npc, traits);
             NpcGroupAccess groupAccess = traits is null ? new NpcGroupAccess() : ResolveGroups(npc, traits);
+
+            // The name-based skips only apply to NPCs no rule names. A rule that matches an NPC (including a template record that
+            // other NPCs inherit their spell list from) is an explicit choice, so "template" or "test" in its EditorID can't drop it.
+            if (rules is null)
+            {
+                if (NpcSkipKeywords.Any(keyword => editorId.Contains(keyword) || npcNameLower.Contains(keyword))) return Skip(npc, "name or EditorID contains a skip word (summon, ghost, spirit, fx, test)");
+                if (editorId.Contains("template") || editorId.Contains("dummy") || editorId.Contains("test") || editorId.Contains("preset") || npcNameLower.Contains("preset")) return Skip(npc, "EditorID or name marks it as a template, dummy, test or preset");
+            }
 
             // The regular distribution first, so the spells a rule adds don't change which element or school the NPC counts as.
             bool changed = false;

@@ -149,17 +149,12 @@ namespace TrueUnleveledSkyrim.Config
         [JsonProperty] public SpellSelector Except { get; set; } = new();
     }
 
-    public class SpellRule
+    // Who a rule applies to is described by the inherited NPC matcher fields (EditorIDKeys, RequiredEditorIDKeys, EditorIDPatterns,
+    // NameKeys, ForbiddenKeys, NpcPlugins, ForbiddenNpcPlugins, Factions, ActorTypeKeywords). Every non-empty criterion has to match, and at least one has to be set.
+    public class SpellRule : SpellNpcMatcher
     {
         [JsonProperty] public string Name { get; set; } = string.Empty;
         [JsonProperty] public bool Enabled { get; set; } = true;
-
-        // Who the rule applies to. Every non-empty criterion has to match, and at least one has to be set.
-        // Keys are matched against the NPC's name and EditorID, and forbidden keys veto the rule.
-        [JsonProperty] public List<string> NameKeys { get; set; } = new();
-        [JsonProperty] public List<string> ForbiddenKeys { get; set; } = new();
-        [JsonProperty] public List<string> Factions { get; set; } = new();
-        [JsonProperty] public List<string> ActorTypeKeywords { get; set; } = new();
 
         // Spells the NPC always gets. SpellIDs are given as they are. Spells selected by Plugins still respect the NPC's level and magicka.
         [JsonProperty] public SpellSelector MustReceive { get; set; } = new();
@@ -186,11 +181,22 @@ namespace TrueUnleveledSkyrim.Config
         // All of these in the NPC's EditorID.
         [JsonProperty] public List<string> RequiredEditorIDKeys { get; set; } = new();
 
+        // Regular expressions matched against the NPC's EditorID, ignoring case. Any of them matching is enough. This covers numbered
+        // variants: "encwarlock\\d+fire" matches EncWarlock01Fire and EncWarlock03Fire. In JSON a backslash has to be written twice.
+        [JsonProperty] public List<string> EditorIDPatterns { get; set; } = new();
+
         // Any of these in the NPC's name or EditorID.
         [JsonProperty] public List<string> NameKeys { get; set; } = new();
 
         // None of these in the NPC's name or EditorID.
         [JsonProperty] public List<string> ForbiddenKeys { get; set; } = new();
+
+        // The NPC has to come from one of these plugins: parts of plugin file names, compared ignoring case. This is the plugin that
+        // created the NPC, not one that only overrides it. Leave empty to allow every plugin.
+        [JsonProperty] public List<string> NpcPlugins { get; set; } = new();
+
+        // The NPC must not come from any of these plugins (parts of plugin file names).
+        [JsonProperty] public List<string> ForbiddenNpcPlugins { get; set; } = new();
 
         // Any of these factions (EditorIDs) the NPC is in.
         [JsonProperty] public List<string> Factions { get; set; } = new();
