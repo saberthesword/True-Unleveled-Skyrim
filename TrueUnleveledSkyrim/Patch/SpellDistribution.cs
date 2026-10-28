@@ -123,15 +123,18 @@ namespace TrueUnleveledSkyrim.Patch
                    matcher.NameKeys.Count + matcher.NpcPlugins.Count + matcher.Factions.Count + matcher.ActorTypeKeywords.Count > 0;
         }
 
-        private static bool MatcherMatches(SpellNpcMatcher matcher, Npc npc, RuleTraits traits)
+        // Why an NPC does not match, or null if it does. The reason is shown in the report for NPCs on the watchlist.
+        private static string? GetMatcherFailure(SpellNpcMatcher matcher, Npc npc, RuleTraits traits)
         {
             if (!HasNpcCriteria(matcher))
-                return false;
+                return "it has no NPC criteria";
 
             // The plugin that created the NPC.
             string npcPlugin = npc.FormKey.ModKey.FileName.String;
-            if (matcher.NpcPlugins.Count > 0 && !matcher.NpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase))) return false;
-            if (matcher.ForbiddenNpcPlugins.Count > 0 && matcher.ForbiddenNpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase))) return false;
+            if (matcher.NpcPlugins.Count > 0 && !matcher.NpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase)))
+                return "the NPC comes from " + npcPlugin + ", which matches none of NpcPlugins";
+            if (matcher.ForbiddenNpcPlugins.Count > 0 && matcher.ForbiddenNpcPlugins.Any(snippet => npcPlugin.Contains(snippet, StringComparison.OrdinalIgnoreCase)))
+                return "the NPC comes from " + npcPlugin + ", which is in ForbiddenNpcPlugins";
 
             string? name = npc.Name?.String;
             string? editorId = npc.EditorID;
@@ -139,15 +142,20 @@ namespace TrueUnleveledSkyrim.Patch
             bool InEditorId(string key) => editorId?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false;
             bool InNameOrEditorId(string key) => (name?.Contains(key, StringComparison.OrdinalIgnoreCase) ?? false) || InEditorId(key);
 
-            if (matcher.EditorIDKeys.Count > 0 && !matcher.EditorIDKeys.Any(InEditorId)) return false;
-            if (matcher.RequiredEditorIDKeys.Count > 0 && !matcher.RequiredEditorIDKeys.All(InEditorId)) return false;
-            if (matcher.EditorIDPatterns.Count > 0 && (editorId is null || !matcher.EditorIDPatterns.Any(pattern => GetPattern(pattern).IsMatch(editorId)))) return false;
-            if (matcher.NameKeys.Count > 0 && !matcher.NameKeys.Any(InNameOrEditorId)) return false;
-            if (matcher.ForbiddenKeys.Count > 0 && matcher.ForbiddenKeys.Any(InNameOrEditorId)) return false;
-            if (matcher.ActorTypeKeywords.Count > 0 && !matcher.ActorTypeKeywords.Any(keyword => traits.Keywords.Contains(keyword))) return false;
-            if (matcher.Factions.Count > 0 && !matcher.Factions.Any(faction => traits.Factions.Contains(faction))) return false;
+            if (matcher.EditorIDKeys.Count > 0 && !matcher.EditorIDKeys.Any(InEditorId)) return "the EditorID '" + editorId + "' contains none of EditorIDKeys";
+            if (matcher.RequiredEditorIDKeys.Count > 0 && !matcher.RequiredEditorIDKeys.All(InEditorId)) return "the EditorID '" + editorId + "' does not contain all of RequiredEditorIDKeys";
+            if (matcher.EditorIDPatterns.Count > 0 && (editorId is null || !matcher.EditorIDPatterns.Any(pattern => GetPattern(pattern).IsMatch(editorId)))) return "the EditorID '" + editorId + "' matches none of EditorIDPatterns";
+            if (matcher.NameKeys.Count > 0 && !matcher.NameKeys.Any(InNameOrEditorId)) return "the name and EditorID ('" + editorId + "') contain none of NameKeys";
+            if (matcher.ForbiddenKeys.Count > 0 && matcher.ForbiddenKeys.Any(InNameOrEditorId)) return "the name or EditorID contains one of ForbiddenKeys";
+            if (matcher.ActorTypeKeywords.Count > 0 && !matcher.ActorTypeKeywords.Any(keyword => traits.Keywords.Contains(keyword))) return "none of ActorTypeKeywords is on the NPC or its race";
+            if (matcher.Factions.Count > 0 && !matcher.Factions.Any(faction => traits.Factions.Contains(faction))) return "the NPC is in none of Factions";
 
-            return true;
+            return null;
+        }
+
+        private static bool MatcherMatches(SpellNpcMatcher matcher, Npc npc, RuleTraits traits)
+        {
+            return GetMatcherFailure(matcher, npc, traits) is null;
         }
 
         private static NpcGroupAccess ResolveGroups(Npc npc, RuleTraits traits)
@@ -457,11 +465,6 @@ namespace TrueUnleveledSkyrim.Patch
             Console.WriteLine("Spell rules: " + compiledRules.Count + " active, " + spellGroups.Count + " spell groups.");
         }
 
-        private static bool RuleMatches(SpellRule rule, Npc npc, RuleTraits traits)
-        {
-            return MatcherMatches(rule, npc, traits);
-        }
-
         // Combines every rule that matches the NPC, or null if none does.
         private static NpcSpellRules? ResolveRules(Npc npc, RuleTraits traits)
         {
@@ -471,8 +474,12 @@ namespace TrueUnleveledSkyrim.Patch
             NpcSpellRules? result = null;
             foreach (CompiledRule rule in compiledRules)
             {
-                if (!RuleMatches(rule.Definition, npc, traits))
+                string? failure = GetMatcherFailure(rule.Definition, npc, traits);
+                if (failure is not null)
+                {
+                    PatchReport.Trace(npc, "Spell rule '" + rule.Definition.Name + "' does not apply: " + failure);
                     continue;
+                }
 
                 result ??= new NpcSpellRules();
                 result.Rules.Add(rule);
@@ -1009,24 +1016,32 @@ namespace TrueUnleveledSkyrim.Patch
             List<string> mustKeywords = rules.Rules.SelectMany(rule => rule.Definition.MustReceive.Keywords).ToList();
             if (mustPlugins.Count > 0 || mustKeywords.Count > 0)
             {
+                int candidates = 0, alreadyKnown = 0, blocked = 0, tooHighTier = 0, tooCostly = 0, needsArchmage = 0, otherReasons = 0;
                 foreach (CachedSpell cachedSpell in cachedSpells)
                 {
                     if (!mustPlugins.Any(snippet => IsFromPlugin(cachedSpell.Spell, snippet)) &&
                         !mustKeywords.Any(keyword => cachedSpell.Keywords.Contains(keyword))) continue;
-                    if (knownSpellKeys.Contains(cachedSpell.FormKey) || chosen.Contains(cachedSpell.FormKey)) continue;
-                    if (rules.Blocks(cachedSpell)) continue;
-                    if (cachedSpell.RequiredLevel > tierCap) continue;
-                    if (cachedSpell.BaseCost > npcMagicka) continue;
+                    ++candidates;
+
+                    if (knownSpellKeys.Contains(cachedSpell.FormKey) || chosen.Contains(cachedSpell.FormKey)) { ++alreadyKnown; continue; }
+                    if (rules.Blocks(cachedSpell)) { ++blocked; continue; }
+                    if (cachedSpell.RequiredLevel > tierCap) { ++tooHighTier; continue; }
+                    if (cachedSpell.BaseCost > npcMagicka) { ++tooCostly; continue; }
 
                     // Concentration and ground-targeted spells are reserved for high level casters, like in the regular distribution.
-                    if (!isArchmage && (cachedSpell.Spell.CastType == CastType.Concentration || cachedSpell.Spell.TargetType == TargetType.TargetLocation)) continue;
+                    if (!isArchmage && (cachedSpell.Spell.CastType == CastType.Concentration || cachedSpell.Spell.TargetType == TargetType.TargetLocation)) { ++needsArchmage; continue; }
 
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) continue;
-                    if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) continue;
+                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { ++otherReasons; continue; }
+                    if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) { ++otherReasons; continue; }
 
                     chosen.Add(cachedSpell.FormKey);
                     spellsToAdd.Add(cachedSpell.Spell);
                 }
+
+                PatchReport.Trace(npc, "Must-receive by plugin or keyword: " + candidates + " matching spells in the spell pool. Level " + npcLevel + " allows spell tier up to " + tierCap +
+                    ", estimated magicka " + Math.Round(npcMagicka) + ", archmage " + isArchmage + ". Already known " + alreadyKnown + ", forbidden by a rule " + blocked +
+                    ", tier too high " + tooHighTier + ", too expensive " + tooCostly + ", concentration or ground-targeted (needs archmage) " + needsArchmage + ", other " + otherReasons +
+                    ". If the pool count is 0, no spell with that plugin or keyword passed the pool filters (a castable hand spell with a school perk, learnable from a tome or picked by a rule, and not tied to a quest or location).");
             }
 
             if (spellsToAdd.Count == 0)
@@ -1063,6 +1078,9 @@ namespace TrueUnleveledSkyrim.Patch
             RuleTraits? traits = compiledRules.Count > 0 || spellGroups.Count > 0 ? new RuleTraits(npc, race, linkCache) : null;
             NpcSpellRules? rules = traits is null ? null : ResolveRules(npc, traits);
             NpcGroupAccess groupAccess = traits is null ? new NpcGroupAccess() : ResolveGroups(npc, traits);
+
+            if (compiledRules.Count == 0 && spellGroups.Count == 0)
+                PatchReport.Trace(npc, "No spell rules or groups are loaded: spellRules.json is missing from the settings data folder, is empty, or every rule in it is disabled");
 
             // The name-based skips only apply to NPCs no rule names. A rule that matches an NPC (including a template record that
             // other NPCs inherit their spell list from) is an explicit choice, so "template" or "test" in its EditorID can't drop it.

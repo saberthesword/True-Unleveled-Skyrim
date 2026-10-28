@@ -1029,10 +1029,17 @@ namespace TrueUnleveledSkyrim.Patch
                         continue;
 
                     if (npcGetter.Configuration.Flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset) || npcGetter.HasKeyword(Skyrim.Keyword.PlayerKeyword))
+                    {
+                        PatchReport.TraceSkipped(npcGetter, "character creation preset or the player");
                         continue;
+                    }
 
                     if (excludedNPCs.Keys.Any(key => npcGetter.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)) && !excludedNPCs.ForbiddenKeys.Any(key => npcGetter.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        string matchedKey = excludedNPCs.Keys.First(key => npcGetter.EditorID.Contains(key, StringComparison.OrdinalIgnoreCase));
+                        PatchReport.TraceSkipped(npcGetter, "its EditorID contains '" + matchedKey + "', a key in excludedNPCs.json");
                         continue;
+                    }
 
                     bool wasChanged = false;
                     Npc npcCopy = npcGetter.DeepCopy();
@@ -1049,6 +1056,10 @@ namespace TrueUnleveledSkyrim.Patch
                     {
                         state.PatchMod.Npcs.Set(npcCopy);
                         ++changedRecords;
+                    }
+                    else
+                    {
+                        PatchReport.Trace(npcCopy, "Went through every stage, but nothing was changed, so the record is not in the patch");
                     }
                 }
                 catch (Exception ex)

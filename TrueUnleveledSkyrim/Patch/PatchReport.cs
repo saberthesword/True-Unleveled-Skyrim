@@ -32,15 +32,23 @@ namespace TrueUnleveledSkyrim.Patch
             spellSkipReasons.Clear();
 
             var settings = Patcher.ModSettings.Value;
-            Enabled = settings.WriteReport;
             watchWords = settings.ReportWatchlist.Where(word => !string.IsNullOrWhiteSpace(word)).Select(word => word.Trim()).ToList();
+
+            // Adding words to the watchlist turns the report on, because a trace is useless without somewhere to write it.
+            Enabled = settings.WriteReport || watchWords.Count > 0;
         }
 
-        private static bool IsWatched(Npc npc)
+        private static bool MatchesWatchlist(string? editorId, string? name)
         {
             return watchWords.Count > 0 && watchWords.Any(word =>
-                (npc.EditorID?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (npc.Name?.String?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false));
+                (editorId?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (name?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        // True if the report is on and the NPC matches a watchlist word.
+        public static bool IsWatched(Npc npc)
+        {
+            return Enabled && MatchesWatchlist(npc.EditorID, npc.Name?.String);
         }
 
         private static NpcEntry GetEntry(Npc npc)
@@ -65,8 +73,23 @@ namespace TrueUnleveledSkyrim.Patch
         // Records something that only matters for NPCs on the watchlist, such as why they did not get something.
         public static void Trace(Npc npc, string line)
         {
-            if (Enabled && IsWatched(npc))
+            if (IsWatched(npc))
                 GetEntry(npc).Lines.Add(line);
+        }
+
+        // For NPCs that are dropped before the stages that explain themselves, such as by excludedNPCs.json. Only watchlist NPCs are listed.
+        public static void TraceSkipped(INpcGetter npc, string reason)
+        {
+            if (!Enabled || !MatchesWatchlist(npc.EditorID, npc.Name?.String))
+                return;
+
+            if (!entries.TryGetValue(npc.FormKey, out NpcEntry? entry))
+            {
+                entry = new NpcEntry((npc.EditorID ?? "(no EditorID)") + "  \"" + (npc.Name?.String ?? "") + "\"  [" + npc.FormKey + "]");
+                entries[npc.FormKey] = entry;
+            }
+
+            entry.Lines.Add("Skipped by the NPC stage before spells and perks: " + reason);
         }
 
         public static void SpellSkipped(Npc npc, string reason)
