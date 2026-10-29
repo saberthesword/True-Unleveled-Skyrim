@@ -328,12 +328,15 @@ namespace TrueUnleveledSkyrim.Patch
             return spell.FormKey.ModKey.FileName.String.Contains(pluginSnippet, StringComparison.OrdinalIgnoreCase);
         }
 
-        // Spells a rule selects by plugin or keyword are kept even if they can't be learned from a book, so the rule can hand them
-        // out. They are marked ExclusiveOnly and never take part in the regular distribution.
+        // Spells that no tome teaches are only kept for rules that set IncludeNonTomeSpells, and only if the rule selects them by plugin or
+        // keyword. They are marked ExclusiveOnly and never take part in the regular distribution.
         private static bool IsRulePluginSpell(ISpellGetter spell)
         {
             foreach (CompiledRule rule in compiledRules)
             {
+                if (!rule.Definition.IncludeNonTomeSpells)
+                    continue;
+
                 SpellSelector mustReceive = rule.Definition.MustReceive;
                 if (mustReceive.Plugins.Any(snippet => IsFromPlugin(spell, snippet)))
                     return true;
@@ -1011,18 +1014,32 @@ namespace TrueUnleveledSkyrim.Patch
                 }
             }
 
-            // Spells selected by plugin or keyword.
-            List<string> mustPlugins = rules.Rules.SelectMany(rule => rule.Definition.MustReceive.Plugins).ToList();
-            List<string> mustKeywords = rules.Rules.SelectMany(rule => rule.Definition.MustReceive.Keywords).ToList();
-            if (mustPlugins.Count > 0 || mustKeywords.Count > 0)
+            // Spells selected by plugin or keyword. A spell that no tome teaches only counts for a rule that allows it.
+            if (rules.Rules.Any(rule => rule.Definition.MustReceive.Plugins.Count > 0 || rule.Definition.MustReceive.Keywords.Count > 0))
             {
-                int candidates = 0, alreadyKnown = 0, blocked = 0, tooHighTier = 0, tooCostly = 0, needsArchmage = 0, otherReasons = 0;
+                int candidates = 0, notTaughtByATome = 0, alreadyKnown = 0, blocked = 0, tooHighTier = 0, tooCostly = 0, needsArchmage = 0, otherReasons = 0;
                 foreach (CachedSpell cachedSpell in cachedSpells)
                 {
-                    if (!mustPlugins.Any(snippet => IsFromPlugin(cachedSpell.Spell, snippet)) &&
-                        !mustKeywords.Any(keyword => cachedSpell.Keywords.Contains(keyword))) continue;
+                    bool selected = false;
+                    bool allowed = false;
+                    foreach (CompiledRule rule in rules.Rules)
+                    {
+                        SpellSelector mustReceive = rule.Definition.MustReceive;
+                        if (!mustReceive.Plugins.Any(snippet => IsFromPlugin(cachedSpell.Spell, snippet)) &&
+                            !mustReceive.Keywords.Any(keyword => cachedSpell.Keywords.Contains(keyword))) continue;
+
+                        selected = true;
+                        if (rule.Definition.IncludeNonTomeSpells || !cachedSpell.ExclusiveOnly)
+                        {
+                            allowed = true;
+                            break;
+                        }
+                    }
+
+                    if (!selected) continue;
                     ++candidates;
 
+                    if (!allowed) { ++notTaughtByATome; continue; }
                     if (knownSpellKeys.Contains(cachedSpell.FormKey) || chosen.Contains(cachedSpell.FormKey)) { ++alreadyKnown; continue; }
                     if (rules.Blocks(cachedSpell)) { ++blocked; continue; }
                     if (cachedSpell.RequiredLevel > tierCap) { ++tooHighTier; continue; }
@@ -1039,9 +1056,10 @@ namespace TrueUnleveledSkyrim.Patch
                 }
 
                 PatchReport.Trace(npc, "Must-receive by plugin or keyword: " + candidates + " matching spells in the spell pool. Level " + npcLevel + " allows spell tier up to " + tierCap +
-                    ", estimated magicka " + Math.Round(npcMagicka) + ", archmage " + isArchmage + ". Already known " + alreadyKnown + ", forbidden by a rule " + blocked +
+                    ", estimated magicka " + Math.Round(npcMagicka) + ", archmage " + isArchmage + ". Not taught by any spell tome " + notTaughtByATome +
+                    " (set IncludeNonTomeSpells on the rule to allow these), already known " + alreadyKnown + ", forbidden by a rule " + blocked +
                     ", tier too high " + tooHighTier + ", too expensive " + tooCostly + ", concentration or ground-targeted (needs archmage) " + needsArchmage + ", other " + otherReasons +
-                    ". If the pool count is 0, no spell with that plugin or keyword passed the pool filters (a castable hand spell with a school perk, learnable from a tome or picked by a rule, and not tied to a quest or location).");
+                    ". If the pool count is 0, no spell with that plugin or keyword passed the pool filters (a castable hand spell with a school perk, learnable from a tome or allowed by IncludeNonTomeSpells, and not tied to a quest or location).");
             }
 
             if (spellsToAdd.Count == 0)

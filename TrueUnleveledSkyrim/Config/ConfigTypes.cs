@@ -165,6 +165,11 @@ namespace TrueUnleveledSkyrim.Config
         // perks were set up correctly but whose spells were not.
         [JsonProperty] public bool SpellsFromPerks { get; set; } = false;
 
+        // By default, the spells a rule selects with MustReceive.Plugins or MustReceive.Keywords have to be learnable from a spell tome, like the
+        // spells of the regular distribution. Set this to true to also give spells that no tome teaches, such as NPC-only spells.
+        // Spells named in MustReceive.SpellIDs are always given as they are.
+        [JsonProperty] public bool IncludeNonTomeSpells { get; set; } = false;
+
         // If false, the NPC gets none of the regular distribution, only the MustReceive spells.
         [JsonProperty] public bool NaturalDistribution { get; set; } = true;
 
