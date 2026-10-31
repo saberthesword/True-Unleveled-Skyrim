@@ -46,7 +46,7 @@ namespace TrueUnleveledSkyrim.Config
         public string ReportPath { get; set; } = string.Empty;
 
 
-        [Tooltip("NPCs whose name or EditorID contains one of these words get a full trace in the report, including the reason they did NOT get spells or custom perk trees. Useful to find out why a specific NPC got nothing.")]
+        [Tooltip("NPCs whose name or EditorID contains one of these words get a full trace in the report, including the reason they did NOT get spells or custom perk trees. Useful to find out why a specific NPC got nothing. Adding words here also turns the report on.")]
         public List<string> ReportWatchlist { get; set; } = new();
     }
 
@@ -116,6 +116,14 @@ namespace TrueUnleveledSkyrim.Config
         public bool RemoveVanillaPerks { get; set; } = true;
 
 
+        [Tooltip("If enabled, perks from skill trees the NPC doesn't use are removed, whichever plugin they come from, and the points are spent on the skills it does use. For example, a necromancer that a mod author gave warrior perks. A skill counts as used if it has weight in the NPC's class, which is rebuilt from its equipment and spells. Perks that aren't part of a skill tree, such as abilities, are never touched. Needs perk distribution to be enabled.")]
+        public bool RemoveMismatchedPerks { get; set; } = true;
+
+
+        [Tooltip("If enabled, the setting above only applies to generic NPCs, meaning those not flagged as Unique. Unique NPCs, such as followers and named characters, keep the perks their authors gave them. Disable it to apply the cleanup to every NPC.")]
+        public bool MismatchedPerksOnlyForGenericNPCs { get; set; } = true;
+
+
         [Tooltip("If enabled, makes the Extra Damage perks that bloat NPC damage do nothing instead. Optimal if you want to distribute perks and/or use a skill-based damage mod.")]
         public bool DisableExtraDamagePerks { get; set; } = true;
 
@@ -148,7 +156,7 @@ namespace TrueUnleveledSkyrim.Config
         public List<ModKey> BlacklistedSpellPlugins { get; set; } = new();
 
 
-        [Tooltip("These specific spells are never given to NPCs.")]
+        [Tooltip("These specific spells are never given to NPCs. Type the spell's EditorID, for example MAG_OpenNoviceLock. A FormKey such as 012345:Skyrim.esm also works.")]
         public List<string> BlacklistedSpells { get; set; } = new();
     }
 
@@ -177,4 +185,4 @@ namespace TrueUnleveledSkyrim.Config
         [Tooltip("If enabled, tempering is made about 40% less effective across the board for balancing reasons, making way for the artifacts to shine without Smithing being mandatory.")]
         public bool TemperingDebuff { get; set; } = true;
     }
-}
+}

@@ -17,9 +17,13 @@ namespace TrueUnleveledSkyrim.Patch
     {
         private static HashSet<FormKey>? treePerksCache;
 
+        // The skill whose perk tree a perk belongs to. Includes perks a perk overhaul added to the trees.
+        private static Dictionary<FormKey, Skill>? perkSkills;
+
         private static void PopulateTreePerksCache(ILinkCache linkCache)
         {
             treePerksCache = new HashSet<FormKey>();
+            perkSkills = new Dictionary<FormKey, Skill>();
             foreach (Skill skill in Enum.GetValues<Skill>())
             {
                 if (GetTreeFromSkill(skill, linkCache, out var actorValue) && actorValue?.PerkTree is not null)
@@ -27,7 +31,10 @@ namespace TrueUnleveledSkyrim.Patch
                     foreach (var perkNode in actorValue.PerkTree)
                     {
                         if (perkNode.Perk.FormKey != FormKey.Null)
+                        {
                             treePerksCache.Add(perkNode.Perk.FormKey);
+                            perkSkills.TryAdd(perkNode.Perk.FormKey, skill);
+                        }
 
                         // Add <IPerkGetter> to explicitly declare the expected type
                         if (perkNode.Perk.TryResolve<IPerkGetter>(linkCache, out var perkEntry))
@@ -36,6 +43,7 @@ namespace TrueUnleveledSkyrim.Patch
                             while (perkEntry.NextPerk.TryResolve<IPerkGetter>(linkCache, out perkEntry))
                             {
                                 treePerksCache.Add(perkEntry.FormKey);
+                                perkSkills.TryAdd(perkEntry.FormKey, skill);
                             }
                         }
                     }
@@ -320,6 +328,44 @@ namespace TrueUnleveledSkyrim.Patch
             }
         }
 
+        // Generic NPCs (not flagged Unique) are the ones whose authored perks are most likely careless, like a necromancer given warrior perks.
+        // Unique NPCs keep their perks unless the setting says all NPCs.
+        private static bool ShouldFixMismatchedPerks(Npc npc)
+        {
+            var settings = Patcher.ModSettings.Value.NPCs;
+            if (!settings.RemoveMismatchedPerks)
+                return false;
+
+            return !settings.MismatchedPerksOnlyForGenericNPCs || !npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Unique);
+        }
+
+        // Removes the NPC's perks from skill trees it doesn't use, whichever plugin the perks come from. A skill counts as used if its weight
+        // in the NPC's class (built from its equipment and spells) is above 0. The distribution that follows then spends the points where
+        // the NPC actually benefits. Perks outside the skill trees (abilities, race perks) and the base skill boosts are left alone.
+        private static void RemoveMismatchedPerks(Npc npc, IReadOnlyDictionary<Skill, byte> skillWeights)
+        {
+            if (npc.Perks is null || perkSkills is null)
+                return;
+
+            // With no skill in use there is nothing to judge the perks by.
+            if (!skillWeights.Values.Any(weight => weight > 0))
+                return;
+
+            for (int i = npc.Perks.Count - 1; i >= 0; --i)
+            {
+                FormKey perkKey = npc.Perks[i].Perk.FormKey;
+                if (perkKey == Skyrim.Perk.AlchemySkillBoosts.FormKey || perkKey == Skyrim.Perk.PerkSkillBoosts.FormKey)
+                    continue;
+
+                if (!perkSkills.TryGetValue(perkKey, out Skill perkSkill))
+                    continue;
+
+                skillWeights.TryGetValue(perkSkill, out byte weight);
+                if (weight == 0)
+                    npc.Perks.RemoveAt(i);
+            }
+        }
+
         private static bool FulfillsPerkConditions(Npc npc, IPerkGetter perkEntry, Skill currSkill, ILinkCache linkCache)
         {
             // Check if NPC already has the perk or not.
@@ -388,6 +434,9 @@ namespace TrueUnleveledSkyrim.Patch
                 npc.Perks ??= new();
                 if (Patcher.ModSettings.Value.NPCs.RemoveVanillaPerks)
                     RemoveOldPerks(npc, vanillaCache);
+
+                if (ShouldFixMismatchedPerks(npc))
+                    RemoveMismatchedPerks(npc, npcClass.SkillWeights);
 
                 // Custom perk trees the NPC qualifies for (by spells, factions, keywords...), and what they block from the regular trees.
                 List<CustomTree> customTrees = CustomPerksPatcher.GetQualifyingTrees(npc, npcRace, linkCache);
