@@ -121,7 +121,7 @@ namespace TrueUnleveledSkyrim.Patch
             Console.WriteLine();
         }
 
-        private static bool TryParseSkill(string? name, out Skill skill)
+        internal static bool TryParseSkill(string? name, out Skill skill)
         {
             skill = default;
             if (string.IsNullOrWhiteSpace(name))

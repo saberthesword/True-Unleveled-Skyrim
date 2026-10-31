@@ -240,6 +240,9 @@ namespace TrueUnleveledSkyrim.Patch
 
             public SpellRule Definition { get; }
             public List<ISpellGetter> ExplicitSpells { get; } = new();
+
+            // The rule's FocusSkills, parsed.
+            public List<Skill> FocusSkills { get; } = new();
         }
 
         // The combined effect of every rule that matches one NPC.
@@ -441,7 +444,17 @@ namespace TrueUnleveledSkyrim.Patch
                     continue;
                 }
 
-                compiledRules.Add(new CompiledRule(rule));
+                rule.FocusSkills = CleanList(rule.FocusSkills);
+                CompiledRule compiledRule = new(rule);
+                foreach (string skillName in rule.FocusSkills)
+                {
+                    if (CustomPerksPatcher.TryParseSkill(skillName, out Skill focusSkill))
+                        compiledRule.FocusSkills.Add(focusSkill);
+                    else
+                        Console.WriteLine("[Warning] Spell rule '" + rule.Name + "': '" + skillName + "' is not a skill name, so it is ignored in FocusSkills.");
+                }
+
+                compiledRules.Add(compiledRule);
                 neededIDs.UnionWith(rule.MustReceive.SpellIDs);
             }
 
@@ -549,10 +562,14 @@ namespace TrueUnleveledSkyrim.Patch
         private static int npcsGivenSpells;
         private static int spellsGiven;
 
+        // True once Prepare has run. Rules can also be loaded without the spell distribution, for the rules that only affect classes and perks.
+        private static bool spellsEnabled;
+
         public static void Reset()
         {
             cachedSpells.Clear();
             encounterableNpcs.Clear();
+            spellsEnabled = false;
             compiledRules.Clear();
             spellGroups.Clear();
             givenNpcs.Clear();
@@ -568,6 +585,49 @@ namespace TrueUnleveledSkyrim.Patch
                 return;
 
             Console.WriteLine("Spell distribution: " + spellsGiven + " spells given to " + npcsGivenSpells + " NPCs (" + cachedSpells.Count + " spells available).\n");
+        }
+
+        // Loads only spellRules.json, for when the spell distribution is off but rules (like FocusSkills) should still work.
+        public static void PrepareRules(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
+        {
+            Reset();
+            LoadRules(state);
+        }
+
+        // The skills a rule says the NPC is built around, or null if no rule with FocusSkills matches it.
+        internal static List<Skill>? GetFocusSkills(Npc npc, IRaceGetter race, ILinkCache linkCache, bool report = false)
+        {
+            if (!compiledRules.Any(rule => rule.FocusSkills.Count > 0))
+                return null;
+
+            RuleTraits traits = new(npc, race, linkCache);
+            List<Skill>? focus = null;
+            foreach (CompiledRule rule in compiledRules)
+            {
+                if (rule.FocusSkills.Count == 0)
+                    continue;
+
+                string? failure = GetMatcherFailure(rule.Definition, npc, traits);
+                if (failure is not null)
+                {
+                    if (report)
+                        PatchReport.Trace(npc, "Focus skills of rule '" + rule.Definition.Name + "' do not apply: " + failure);
+
+                    continue;
+                }
+
+                focus ??= new List<Skill>();
+                foreach (Skill skill in rule.FocusSkills)
+                {
+                    if (!focus.Contains(skill))
+                        focus.Add(skill);
+                }
+
+                if (report)
+                    PatchReport.Add(npc, "Skill focus from rule '" + rule.Definition.Name + "': " + string.Join(", ", rule.FocusSkills));
+            }
+
+            return focus;
         }
 
         // Collects the spells that can be handed out and the NPCs that actually appear in the world. Call once before the NPC loop.
@@ -640,6 +700,7 @@ namespace TrueUnleveledSkyrim.Patch
             }
 
             Console.WriteLine("Spell distribution: " + cachedSpells.Count + " spells available, " + encounterableNpcs.Count + " NPCs appear in the world.");
+            spellsEnabled = true;
         }
 
         // ---- Spell classification helpers (ported) ------------------------------------------------------------
@@ -1074,7 +1135,7 @@ namespace TrueUnleveledSkyrim.Patch
         // Gives the NPC fitting spells. Call after the NPC's static level has been set. Returns true if spells were added.
         public static bool DistributeSpells(Npc npc, ILinkCache linkCache)
         {
-            if (cachedSpells.Count == 0 && compiledRules.Count == 0) return false;
+            if (!spellsEnabled) return false;
 
             if (npc.IsDeleted) return Skip(npc, "deleted record");
             if (npc.FormKey == Skyrim.Npc.Player.FormKey) return false;

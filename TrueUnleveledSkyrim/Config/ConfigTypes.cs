@@ -165,6 +165,11 @@ namespace TrueUnleveledSkyrim.Config
         // perks were set up correctly but whose spells were not.
         [JsonProperty] public bool SpellsFromPerks { get; set; } = false;
 
+        // The skills this kind of NPC is built around, for example ["Conjuration", "Destruction"] for a necromancer. The NPC's class is set to
+        // exactly these skills, so its skill levels, perks and spells follow them, and perks from every other skill tree are removed.
+        // Use it when the NPC's own class or perks are wrong, such as a mage the mod author gave a warrior's class and perks.
+        [JsonProperty] public List<string> FocusSkills { get; set; } = new();
+
         // By default, the spells a rule selects with MustReceive.Plugins or MustReceive.Keywords have to be learnable from a spell tome, like the
         // spells of the regular distribution. Set this to true to also give spells that no tome teaches, such as NPC-only spells.
         // Spells named in MustReceive.SpellIDs are always given as they are.

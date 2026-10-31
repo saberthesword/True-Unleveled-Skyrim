@@ -342,7 +342,7 @@ namespace TrueUnleveledSkyrim.Patch
         // Removes the NPC's perks from skill trees it doesn't use, whichever plugin the perks come from. A skill counts as used if its weight
         // in the NPC's class (built from its equipment and spells) is above 0. The distribution that follows then spends the points where
         // the NPC actually benefits. Perks outside the skill trees (abilities, race perks) and the base skill boosts are left alone.
-        private static void RemoveMismatchedPerks(Npc npc, IReadOnlyDictionary<Skill, byte> skillWeights)
+        private static void RemoveMismatchedPerks(Npc npc, IReadOnlyDictionary<Skill, byte> skillWeights, ILinkCache linkCache)
         {
             if (npc.Perks is null || perkSkills is null)
                 return;
@@ -357,10 +357,21 @@ namespace TrueUnleveledSkyrim.Patch
                 if (perkKey == Skyrim.Perk.AlchemySkillBoosts.FormKey || perkKey == Skyrim.Perk.PerkSkillBoosts.FormKey)
                     continue;
 
+                bool watched = PatchReport.IsWatched(npc);
+                string perkName = watched && linkCache.TryResolve(new FormLink<IPerkGetter>(perkKey), out var perkRecord) && perkRecord.EditorID is not null ? perkRecord.EditorID : perkKey.ToString();
+
                 if (!perkSkills.TryGetValue(perkKey, out Skill perkSkill))
+                {
+                    if (watched)
+                        PatchReport.Trace(npc, "Perk " + perkName + ": not in any skill tree, kept");
+
                     continue;
+                }
 
                 skillWeights.TryGetValue(perkSkill, out byte weight);
+                if (watched)
+                    PatchReport.Trace(npc, "Perk " + perkName + ": " + perkSkill + " tree, class weight " + weight + (weight == 0 ? ", removed" : ", kept"));
+
                 if (weight == 0)
                     npc.Perks.RemoveAt(i);
             }
@@ -402,11 +413,17 @@ namespace TrueUnleveledSkyrim.Patch
         {
             // NPCs with the inherit spell list flag actually inherit perks, so no need to change them.
             if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.SpellList) && !npc.Template.IsNull)
+            {
+                PatchReport.Trace(npc, "Perk step skipped: the NPC inherits its template's perks, so the template record is the one that has to be fixed");
                 return false;
+            }
 
             // Check the keyword filters to see if any should be excluded.
             if (!ShouldModifyPerks(npc, linkCache))
+            {
+                PatchReport.Trace(npc, "Perk step skipped: the perk distribution filter (a keyword on the NPC or its race) excludes it");
                 return false;
+            }
 
             //if (npc.Perks is null || !npc.Perks.Any(p => treePerksCache!.Contains(p.Perk.FormKey)))
                 //return false;
@@ -435,8 +452,14 @@ namespace TrueUnleveledSkyrim.Patch
                 if (Patcher.ModSettings.Value.NPCs.RemoveVanillaPerks)
                     RemoveOldPerks(npc, vanillaCache);
 
-                if (ShouldFixMismatchedPerks(npc))
-                    RemoveMismatchedPerks(npc, npcClass.SkillWeights);
+                // A rule's focus skills force the cleanup, even for unique NPCs or with the general setting off.
+                bool focusedByRule = SpellDistributor.GetFocusSkills(npc, npcRace, linkCache) is not null;
+                if (PatchReport.IsWatched(npc))
+                    PatchReport.Trace(npc, "Perk cleanup: class " + (npcClass.EditorID ?? "?") + " has skill weights " + string.Join(", ", npcClass.SkillWeights.Where(x => x.Value > 0).Select(x => x.Key + " " + x.Value)) +
+                        "; focused by a rule " + focusedByRule + "; general cleanup applies to this NPC " + ShouldFixMismatchedPerks(npc));
+
+                if (focusedByRule || ShouldFixMismatchedPerks(npc))
+                    RemoveMismatchedPerks(npc, npcClass.SkillWeights, linkCache);
 
                 // Custom perk trees the NPC qualifies for (by spells, factions, keywords...), and what they block from the regular trees.
                 List<CustomTree> customTrees = CustomPerksPatcher.GetQualifyingTrees(npc, npcRace, linkCache);
@@ -972,6 +995,55 @@ namespace TrueUnleveledSkyrim.Patch
                 newSkillWeights[Skill.Block] = 1;
         }
 
+        // Gives the NPC a class made only of the skills a spell rule lists as its FocusSkills. The skill levels, perks and spells that come after
+        // follow the class. focusApplies tells the caller that a rule decided, so the regular class rebuild must not run.
+        private static bool ApplyFocusSkills(Npc npc, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, ILinkCache linkCache, out bool focusApplies)
+        {
+            focusApplies = false;
+
+            // NPCs that inherit stats inherit the class too, so the rule has to match their template instead.
+            if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Stats) && !npc.Template.IsNull)
+                return false;
+
+            if (!npc.Class.TryResolve(linkCache, out var classGetter))
+                return false;
+
+            if (!npc.Race.TryResolve<IRaceGetter>(linkCache, out var npcRace))
+                return false;
+
+            List<Skill>? focusSkills = SpellDistributor.GetFocusSkills(npc, npcRace, linkCache, report: true);
+            if (focusSkills is null || focusSkills.Count == 0)
+                return false;
+
+            focusApplies = true;
+            byte weight = (byte)Math.Max(1, 100 / focusSkills.Count);
+
+            bool changed = false;
+            foreach (var kvp in classGetter.SkillWeights)
+            {
+                byte wanted = focusSkills.Contains(kvp.Key) ? weight : (byte)0;
+                if (kvp.Value != wanted)
+                {
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (!changed)
+                return false;
+
+            var newClass = state.PatchMod.Classes.AddNew();
+            newClass.DeepCopyIn(classGetter);
+            newClass.EditorID = "TUSClass" + npc.EditorID;
+            npc.Class = newClass.ToLink();
+
+            foreach (Skill skill in newClass.SkillWeights.Keys.ToList())
+                newClass.SkillWeights[skill] = focusSkills.Contains(skill) ? weight : (byte)0;
+
+            PatchReport.Add(npc, "Class rebuilt from the focus skills with weight " + weight + " each");
+            return true;
+        }
+
         private static bool RebalanceClassValues(Npc npc, IPatcherState<ISkyrimMod, ISkyrimModGetter> state, ILinkCache linkCache)
         {
             if (!Patcher.ModSettings.Value.NPCs.RebuildNPCClasses)
@@ -1062,6 +1134,8 @@ namespace TrueUnleveledSkyrim.Patch
             // Spells go out first so the class rebuild and perk distribution below see them.
             if (Patcher.ModSettings.Value.NPCs.DistributeSpells)
                 SpellDistributor.Prepare(state);
+            else
+                SpellDistributor.PrepareRules(state);
 
             uint processedRecords = 0;
             uint changedRecords = 0;
@@ -1095,7 +1169,10 @@ namespace TrueUnleveledSkyrim.Patch
 
                     wasChanged |= SetStaticLevel(npcCopy, Patcher.LinkCache);
                     wasChanged |= SpellDistributor.DistributeSpells(npcCopy, Patcher.LinkCache); // after the static level, before the class is rebuilt from the NPC's spells
-                    wasChanged |= RebalanceClassValues(npcCopy, state, Patcher.LinkCache); // since it uses a static link cache it has to go before equipment changes, otherwise it will try to use missing data
+                    // A rule that names the NPC's focus skills decides its class. The regular rebuild would only undo that.
+                    wasChanged |= ApplyFocusSkills(npcCopy, state, Patcher.LinkCache, out bool focusApplies);
+                    if (!focusApplies)
+                        wasChanged |= RebalanceClassValues(npcCopy, state, Patcher.LinkCache); // since it uses a static link cache it has to go before equipment changes, otherwise it will try to use missing data
                     wasChanged |= ChangeEquipment(npcCopy, Patcher.LinkCache);
                     wasChanged |= RelevelNPCSkills(npcCopy, state.LinkCache); // dynamic link cache to account for local class changes
                     wasChanged |= DistributeNPCPerks(npcCopy, state.LinkCache, vanillaCache);
