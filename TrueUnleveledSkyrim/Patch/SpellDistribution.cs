@@ -1000,6 +1000,9 @@ namespace TrueUnleveledSkyrim.Patch
 
         private static bool AddSpells(Npc npc, List<ISpellGetter> spellsToAdd)
         {
+            // Last line of defence: nothing on the blacklist settings is ever given, whichever rule or group picked it.
+            spellsToAdd.RemoveAll(IsGloballyBlocked);
+
             if (spellsToAdd.Count == 0) return false;
 
             npc.ActorEffect ??= new ExtendedList<IFormLinkGetter<ISpellRecordGetter>>();

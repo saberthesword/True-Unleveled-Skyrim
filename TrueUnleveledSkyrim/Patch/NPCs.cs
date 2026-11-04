@@ -1198,7 +1198,7 @@ namespace TrueUnleveledSkyrim.Patch
 
             SpellDistributor.PrintSummary();
             CustomPerksPatcher.PrintSummary();
-            PatchReport.Write();
+            PatchReport.Write(state);
             Console.WriteLine("Processed " + processedRecords + " npcs in total, changed " + changedRecords + ".\n");
         }
     }

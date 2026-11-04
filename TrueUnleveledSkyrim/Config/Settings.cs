@@ -42,7 +42,7 @@ namespace TrueUnleveledSkyrim.Config
         public bool WriteReport { get; set; } = false;
 
 
-        [Tooltip("Full path of the report file. Leave empty to write TUS_Report.txt next to the patcher. The path used is printed in the log.")]
+        [Tooltip("Where to write the report. Leave empty to write TUS_Report.txt next to the json config files, in the patcher's settings data folder. You can enter a full path, a path relative to that folder, or just a folder. The path used is printed in the log.")]
         public string ReportPath { get; set; } = string.Empty;
 
 

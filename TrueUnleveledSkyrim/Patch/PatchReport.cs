@@ -3,6 +3,7 @@ using System.Text;
 using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Cache;
 using Mutagen.Bethesda.Skyrim;
+using Mutagen.Bethesda.Synthesis;
 
 namespace TrueUnleveledSkyrim.Patch
 {
@@ -123,15 +124,44 @@ namespace TrueUnleveledSkyrim.Patch
                 Add(npc, "Perks removed (" + removed.Count + "): " + string.Join(", ", removed));
         }
 
-        public static void Write()
+        // Where the report goes. By default it is TUS_Report.txt in the patcher's settings data folder, next to the json config files such as
+        // spellRules.json. The ReportPath setting can be a full path, a path relative to that folder, or just a folder.
+        private static string ResolveReportPath(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
+        {
+            const string defaultFileName = "TUS_Report.txt";
+
+            // The folder the json config files are read from, then the game's Data folder, then the folder next to the patcher.
+            string baseFolder;
+            string dataFolder = Convert.ToString(state.DataFolderPath) ?? string.Empty;
+            if (!string.IsNullOrEmpty(state.ExtraSettingsDataPath) && Directory.Exists(state.ExtraSettingsDataPath))
+                baseFolder = state.ExtraSettingsDataPath;
+            else if (dataFolder.Length > 0 && Directory.Exists(dataFolder))
+                baseFolder = dataFolder;
+            else
+                baseFolder = AppContext.BaseDirectory;
+
+            string configured = (Patcher.ModSettings.Value.ReportPath ?? string.Empty).Trim().Trim('"');
+            if (configured.Length == 0)
+                return Path.GetFullPath(Path.Combine(baseFolder, defaultFileName));
+
+            string path = Path.IsPathRooted(configured) ? configured : Path.Combine(baseFolder, configured);
+
+            // A folder (one that exists, or one written with a trailing slash) gets the default file name.
+            if (Directory.Exists(path) || configured.EndsWith('\\') || configured.EndsWith('/'))
+                path = Path.Combine(path, defaultFileName);
+
+            return Path.GetFullPath(path);
+        }
+
+        public static void Write(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
             if (!Enabled)
                 return;
 
+            string path = "(unknown)";
             try
             {
-                string configuredPath = Patcher.ModSettings.Value.ReportPath;
-                string path = Path.GetFullPath(string.IsNullOrWhiteSpace(configuredPath) ? Path.Combine(AppContext.BaseDirectory, "TUS_Report.txt") : configuredPath.Trim());
+                path = ResolveReportPath(state);
 
                 StringBuilder report = new();
                 report.AppendLine("True Unleveled Skyrim - NPC report, " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
@@ -163,7 +193,7 @@ namespace TrueUnleveledSkyrim.Patch
             catch (Exception ex)
             {
                 // A report problem must never fail the patch.
-                Console.WriteLine("[Warning] Could not write the report: " + ex.Message + "\n");
+                Console.WriteLine("[Warning] Could not write the report to " + path + ": " + ex.Message + "\n");
             }
         }
     }
