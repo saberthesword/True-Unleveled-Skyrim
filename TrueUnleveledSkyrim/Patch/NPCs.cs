@@ -17,6 +17,10 @@ namespace TrueUnleveledSkyrim.Patch
     {
         private static HashSet<FormKey>? treePerksCache;
 
+        // Perk entries dropped because their record can't be found, for the summary line.
+        private static readonly HashSet<FormKey> unresolvablePerkKeys = new();
+        private static int npcsWithUnresolvablePerks;
+
         // The skill whose perk tree a perk belongs to. Includes perks a perk overhaul added to the trees.
         private static Dictionary<FormKey, Skill>? perkSkills;
 
@@ -326,6 +330,37 @@ namespace TrueUnleveledSkyrim.Patch
                 if (vanillaCache.TryResolve(npc.Perks[i].Perk, out var perk))
                     npc.Perks.RemoveAt(i);
             }
+        }
+
+        // A perk entry whose record can't be found (deleted, or from a plugin that isn't loaded) shows up as an error in xEdit, and writing it into
+        // the patch can even make it depend on a plugin that isn't in the load order. Such entries are dropped. Perks the patcher added itself
+        // are found through the same link cache, so they are not affected.
+        private static bool RemoveUnresolvablePerks(Npc npc, ILinkCache linkCache)
+        {
+            if (npc.Perks is null)
+                return false;
+
+            bool removedAny = false;
+            for (int i = npc.Perks.Count - 1; i >= 0; --i)
+            {
+                IFormLink<IPerkGetter> perkLink = npc.Perks[i].Perk;
+                if (!perkLink.IsNull && perkLink.TryResolve(linkCache, out var resolvedPerk))
+                    continue;
+
+                unresolvablePerkKeys.Add(perkLink.FormKey);
+                PatchReport.Trace(npc, "Removed a perk entry that can't be resolved: " + perkLink.FormKey);
+                npc.Perks.RemoveAt(i);
+                removedAny = true;
+            }
+
+            if (removedAny)
+            {
+                ++npcsWithUnresolvablePerks;
+                if (npc.Perks.Count == 0)
+                    npc.Perks = null;
+            }
+
+            return removedAny;
         }
 
         // Generic NPCs (not flagged Unique) are the ones whose authored perks are most likely careless, like a necromancer given warrior perks.
@@ -1130,6 +1165,8 @@ namespace TrueUnleveledSkyrim.Patch
             PopulateTreePerksCache(state.LinkCache);
 
             PatchReport.Start();
+            unresolvablePerkKeys.Clear();
+            npcsWithUnresolvablePerks = 0;
 
             // Spells go out first so the class rebuild and perk distribution below see them.
             if (Patcher.ModSettings.Value.NPCs.DistributeSpells)
@@ -1178,6 +1215,10 @@ namespace TrueUnleveledSkyrim.Patch
                     wasChanged |= DistributeNPCPerks(npcCopy, state.LinkCache, vanillaCache);
                     wasChanged |= SetFollowerScaling(npcCopy);
 
+                    // Only NPCs that are written anyway are cleaned, so this doesn't add records just to fix another mod's broken references.
+                    if (wasChanged)
+                        RemoveUnresolvablePerks(npcCopy, state.LinkCache);
+
                     if (wasChanged)
                     {
                         state.PatchMod.Npcs.Set(npcCopy);
@@ -1195,6 +1236,10 @@ namespace TrueUnleveledSkyrim.Patch
             }
 
             DisableExtraDamagePerks(state);
+
+            if (unresolvablePerkKeys.Count > 0)
+                Console.WriteLine("Removed perk entries that could not be found (xEdit would show them as errors) from " + npcsWithUnresolvablePerks + " NPCs. The missing perks: " +
+                    string.Join(", ", unresolvablePerkKeys.Take(20)) + (unresolvablePerkKeys.Count > 20 ? ", ..." : "") + "\n");
 
             SpellDistributor.PrintSummary();
             CustomPerksPatcher.PrintSummary();
