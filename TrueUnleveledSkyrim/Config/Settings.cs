@@ -124,6 +124,14 @@ namespace TrueUnleveledSkyrim.Config
         public bool MismatchedPerksOnlyForGenericNPCs { get; set; } = true;
 
 
+        [Tooltip("NPCs whose race has an EditorID containing any of these words never get perks distributed or removed. For animals and creatures that a mod tagged as humanoid, or whose race has no creature keyword. Animals and dragons with the Animal or Dragon actor type keyword are always excluded, whatever this list says.")]
+        public List<string> NonHumanoidRaceKeys { get; set; } = new()
+        {
+            "Wolf", "SabreCat", "Bear", "Deer", "Elk", "Fox", "Goat", "Horse", "Dog", "Hound",
+            "Mudcrab", "Skeever", "Slaughterfish", "Chaurus", "Spider", "Troll", "Mammoth", "Rabbit", "Chicken", "Cow", "Hawk"
+        };
+
+
         [Tooltip("If enabled, makes the Extra Damage perks that bloat NPC damage do nothing instead. Optimal if you want to distribute perks and/or use a skill-based damage mod.")]
         public bool DisableExtraDamagePerks { get; set; } = true;
 
