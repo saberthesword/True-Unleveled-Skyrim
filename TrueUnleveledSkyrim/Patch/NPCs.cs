@@ -64,11 +64,25 @@ namespace TrueUnleveledSkyrim.Patch
         private static NPCFactions? customNPCsByFaction;
         private static RaceModifiers? raceModifiers;
 
+        // Only humanoids get perks. A race counts if it carries the NPC actor type (or is undead), but animals and dragons never do, even when a
+        // mod tagged them otherwise, and races whose EditorID contains a word from the NonHumanoidRaceKeys setting are excluded too.
+        private static bool IsHumanoidRace(IRaceGetter race)
+        {
+            if (race.HasKeyword(Skyrim.Keyword.ActorTypeAnimal) || race.HasKeyword(Skyrim.Keyword.ActorTypeDragon))
+                return false;
+
+            string? raceID = race.EditorID;
+            if (raceID is not null && Patcher.ModSettings.Value.NPCs.NonHumanoidRaceKeys.Any(key => !string.IsNullOrWhiteSpace(key) && raceID.Contains(key.Trim(), StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            return race.HasKeyword(Skyrim.Keyword.ActorTypeNPC) || race.HasKeyword(Skyrim.Keyword.ActorTypeUndead);
+        }
+
         private static bool ShouldModifyPerks(Npc npc, ILinkCache linkCache)
         {
             foreach (var keyword in Patcher.ModSettings.Value.NPCs.PerkDistributionFilter)
             {
-                if (npc.HasKeyword(keyword) || (npc.Race.TryResolve(linkCache, out var raceGetter) && raceGetter.HasKeyword(Skyrim.Keyword.ActorTypeUndead)))
+                if (npc.HasKeyword(keyword) || (npc.Race.TryResolve(linkCache, out var raceGetter) && (raceGetter.HasKeyword(keyword) || raceGetter.HasKeyword(Skyrim.Keyword.ActorTypeUndead))))
                     return false;
             }
 
@@ -475,8 +489,11 @@ namespace TrueUnleveledSkyrim.Patch
                 if (!npc.Race.TryResolve<IRaceGetter>(linkCache, out IRaceGetter? npcRace))
                     return false;
 
-                if (!npcRace.HasKeyword(Skyrim.Keyword.ActorTypeNPC) && !npcRace.HasKeyword(Skyrim.Keyword.ActorTypeUndead))
+                if (!IsHumanoidRace(npcRace))
+                {
+                    PatchReport.Trace(npc, "Perk step skipped: the race " + (npcRace.EditorID ?? "?") + " is not humanoid (it needs the NPC or undead actor type, must not be an animal or dragon, and must not match NonHumanoidRaceKeys)");
                     return false;
+                }
 
                 if (npc.Configuration.Level is NpcLevel npcLevel)
                     perksPerLevel *= npcLevel.Level;
