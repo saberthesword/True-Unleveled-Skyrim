@@ -1000,9 +1000,6 @@ namespace TrueUnleveledSkyrim.Patch
 
         private static bool AddSpells(Npc npc, List<ISpellGetter> spellsToAdd)
         {
-            // Last line of defence: nothing on the blacklist settings is ever given, whichever rule or group picked it.
-            spellsToAdd.RemoveAll(IsGloballyBlocked);
-
             if (spellsToAdd.Count == 0) return false;
 
             npc.ActorEffect ??= new ExtendedList<IFormLinkGetter<ISpellRecordGetter>>();
@@ -1039,7 +1036,7 @@ namespace TrueUnleveledSkyrim.Patch
                     foreach (ISpellGetter knownSpell in GetAllBaseSpells(effectLink, linkCache, visited))
                     {
                         knownSpellKeys.Add(knownSpell.FormKey);
-                        if (VanillaMasters.Contains(knownSpell.FormKey.ModKey.FileName.String) && knownSpell.Type == SpellType.Spell && knownSpell.BaseCost > 0)
+                        if (knownSpell.Type == SpellType.Spell && (isRestrictedRace || (VanillaMasters.Contains(knownSpell.FormKey.ModKey.FileName.String) && knownSpell.BaseCost > 0)))
                             vanillaCastSignatures.Add(GetCastSignature(knownSpell));
                     }
                 }
@@ -1235,6 +1232,17 @@ namespace TrueUnleveledSkyrim.Patch
             {
                 npcKnownSpellKeys.Add(existingSpell.FormKey);
 
+                // For races with their own casting animations (dragon priests, hagravens), every spell the NPC already casts shows what its
+                // animations can do, whatever its cost or plugin. Only the cast style is learned here, so this doesn't make the NPC a magic user.
+                if (isRestrictedRace && existingSpell.Type == SpellType.Spell)
+                {
+                    vanillaCastSignatures.Add(GetCastSignature(existingSpell));
+                    allowedCastTypes.Add(existingSpell.CastType);
+                    allowedTargetTypes.Add(existingSpell.TargetType);
+                    if (existingSpell.CastDuration > maxAllowedCastTime)
+                        maxAllowedCastTime = existingSpell.CastDuration;
+                }
+
                 if (existingSpell.Type != SpellType.Spell || existingSpell.BaseCost <= 0)
                     continue;
 
@@ -1409,35 +1417,62 @@ namespace TrueUnleveledSkyrim.Patch
                     }
                 }
 
+                if (PatchReport.IsWatched(npc))
+                {
+                    int leveledLists = 0;
+                    foreach (var spellLink in npc.ActorEffect.EmptyIfNull())
+                    {
+                        if (spellLink.TryResolve(linkCache, out var spellRecord) && spellRecord is ILeveledSpellGetter)
+                            ++leveledLists;
+                    }
+
+                    PatchReport.Trace(npc, "Spells read from the NPC: " + (npc.ActorEffect?.Count ?? 0) + " spell list entries (" + leveledLists + " leveled spell lists, searched through including nested ones) = " +
+                        flattenedSpells.Count + " spells, " + flattenedSpells.Count(known => known.Type == SpellType.Spell && known.BaseCost > 0) + " of them with a magicka cost");
+                    PatchReport.Trace(npc, "Learned from them: cast types " + string.Join("/", allowedCastTypes) + ", target types " + string.Join("/", allowedTargetTypes) + ", longest cast time " + maxAllowedCastTime +
+                        ", " + vanillaCastSignatures.Count + " exact cast styles (restricted race: " + isRestrictedRace + "), schools " + string.Join("/", allowedSchools) + ", element focus " + npcArchetype +
+                        ". Level " + npcLevel + " allows spell tier up to " + levelBasedFloor + ", estimated magicka " + Math.Round(npcMagicka));
+                }
+
+                int poolSpells = 0, addedHere = 0;
+                Dictionary<string, int> rejected = new();
+                void Reject(string reason) => rejected[reason] = rejected.TryGetValue(reason, out int count) ? count + 1 : 1;
+
                 foreach (var cachedSpell in cachedSpells)
                 {
                     if (cachedSpell.ExclusiveOnly) continue;
-                    if (rules is not null && rules.Blocks(cachedSpell)) continue;
-                    if (npcKnownSpellKeys.Contains(cachedSpell.FormKey)) continue;
+                    ++poolSpells;
 
-                    if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) continue;
-                    if (!allowedTargetTypes.Contains(cachedSpell.Spell.TargetType)) continue;
-                    if (cachedSpell.Spell.CastDuration > maxAllowedCastTime) continue;
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) continue;
+                    if (rules is not null && rules.Blocks(cachedSpell)) { Reject("forbidden by a rule"); continue; }
+                    if (npcKnownSpellKeys.Contains(cachedSpell.FormKey)) { Reject("already known"); continue; }
 
-                    if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) continue;
+                    if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) { Reject("cast type the NPC doesn't use"); continue; }
+                    if (!allowedTargetTypes.Contains(cachedSpell.Spell.TargetType)) { Reject("target type the NPC doesn't use"); continue; }
+                    if (cachedSpell.Spell.CastDuration > maxAllowedCastTime) { Reject("cast time longer than its own spells"); continue; }
+                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { Reject("doesn't cast exactly like a spell the race already uses (cast type, target, slot, cast time)"); continue; }
 
-                    if (!GroupsAllow(cachedSpell, groupAccess)) continue;
+                    if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) { Reject("spell conditions"); continue; }
 
-                    if (cachedSpell.BaseCost > npcMagicka) continue;
+                    if (!GroupsAllow(cachedSpell, groupAccess)) { Reject("spell group restriction"); continue; }
+
+                    if (cachedSpell.BaseCost > npcMagicka) { Reject("too expensive"); continue; }
 
                     if (cachedSpell.Element != SpellElement.None && cachedSpell.Element != SpellElement.Mixed)
                     {
-                        if (!elementsUnrestricted && npcArchetype != SpellElement.Mixed && npcArchetype != cachedSpell.Element) continue;
+                        if (!elementsUnrestricted && npcArchetype != SpellElement.Mixed && npcArchetype != cachedSpell.Element) { Reject("element doesn't fit"); continue; }
                     }
 
-                    if (!allowedSchools.Contains(cachedSpell.School)) continue;
+                    if (!allowedSchools.Contains(cachedSpell.School)) { Reject("school the NPC doesn't use"); continue; }
 
                     effectiveElementLevels.TryGetValue((cachedSpell.School, cachedSpell.Element), out var npcHighestLevel);
-                    if (npcHighestLevel < cachedSpell.RequiredLevel) continue;
+                    if (npcHighestLevel < cachedSpell.RequiredLevel) { Reject("spell tier above what the NPC can use"); continue; }
 
                     spellsToAdd.Add(cachedSpell.Spell);
+                    ++addedHere;
                 }
+
+                if (PatchReport.IsWatched(npc))
+                    PatchReport.Trace(npc, "Regular distribution: " + poolSpells + " spells in the pool, " + addedHere + " chosen. Rejected: " +
+                        (rejected.Count == 0 ? "none" : string.Join(", ", rejected.OrderByDescending(entry => entry.Value).Select(entry => entry.Value + " " + entry.Key))));
             }
 
             if (spellsToAdd.Count == 0)
