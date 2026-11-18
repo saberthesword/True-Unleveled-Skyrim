@@ -251,6 +251,7 @@ namespace TrueUnleveledSkyrim.Patch
             public List<CompiledRule> Rules { get; } = new();
             public bool NaturalDistribution { get; set; } = true;
             public bool SpellsFromPerks { get; set; }
+            public bool AllowAnyCastStyle { get; set; }
             // The must-not-receive selectors of every matching rule. Each keeps its own exception.
             public List<SpellBlockSelector> Blocking { get; } = new();
 
@@ -503,6 +504,8 @@ namespace TrueUnleveledSkyrim.Patch
                     result.NaturalDistribution = false;
                 if (rule.Definition.SpellsFromPerks)
                     result.SpellsFromPerks = true;
+                if (rule.Definition.AllowAnyCastStyle)
+                    result.AllowAnyCastStyle = true;
 
                 result.Blocking.Add(rule.Definition.MustNotReceive);
 
@@ -1024,6 +1027,7 @@ namespace TrueUnleveledSkyrim.Patch
             float npcMagicka = CalculateEstimatedMagicka(npc, npcLevel);
             bool isArchmage = IsArchmage(npc, npcLevel);
             bool isRestrictedRace = RestrictedAnimationRaces.Contains(race.FormKey);
+            bool strictCastStyle = isRestrictedRace && !rules.AllowAnyCastStyle;
 
             HashSet<FormKey> knownSpellKeys = new();
             var vanillaCastSignatures = new HashSet<(CastType Cast, TargetType Target, FormKey Equipment, double Duration)>();
@@ -1041,6 +1045,11 @@ namespace TrueUnleveledSkyrim.Patch
                     }
                 }
             }
+
+            if (isRestrictedRace)
+                PatchReport.Trace(npc, "Cast styles learned from the NPC's own spells: " + vanillaCastSignatures.Count + (rules.AllowAnyCastStyle
+                    ? " (not used, a rule allows any cast style)"
+                    : ". Because this race has its own casting animations, must-receive spells have to cast exactly like one of them, so none are given if this is 0 (set AllowAnyCastStyle on the rule to lift this)"));
 
             List<ISpellGetter> spellsToAdd = new();
             HashSet<FormKey> chosen = new();
@@ -1064,7 +1073,7 @@ namespace TrueUnleveledSkyrim.Patch
                         continue;
                     }
 
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(spell)))
+                    if (strictCastStyle && !vanillaCastSignatures.Contains(GetCastSignature(spell)))
                     {
                         PatchReport.Trace(npc, "Spell rule '" + rule.Definition.Name + "': " + spell.EditorID + " not given, it doesn't cast like this race's vanilla spells");
                         continue;
@@ -1078,7 +1087,7 @@ namespace TrueUnleveledSkyrim.Patch
             // Spells selected by plugin or keyword. A spell that no tome teaches only counts for a rule that allows it.
             if (rules.Rules.Any(rule => rule.Definition.MustReceive.Plugins.Count > 0 || rule.Definition.MustReceive.Keywords.Count > 0))
             {
-                int candidates = 0, notTaughtByATome = 0, alreadyKnown = 0, blocked = 0, tooHighTier = 0, tooCostly = 0, needsArchmage = 0, otherReasons = 0;
+                int candidates = 0, notTaughtByATome = 0, alreadyKnown = 0, blocked = 0, tooHighTier = 0, tooCostly = 0, needsArchmage = 0, notCastStyle = 0, otherReasons = 0;
                 foreach (CachedSpell cachedSpell in cachedSpells)
                 {
                     bool selected = false;
@@ -1109,7 +1118,7 @@ namespace TrueUnleveledSkyrim.Patch
                     // Concentration and ground-targeted spells are reserved for high level casters, like in the regular distribution.
                     if (!isArchmage && (cachedSpell.Spell.CastType == CastType.Concentration || cachedSpell.Spell.TargetType == TargetType.TargetLocation)) { ++needsArchmage; continue; }
 
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { ++otherReasons; continue; }
+                    if (strictCastStyle && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { ++notCastStyle; continue; }
                     if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) { ++otherReasons; continue; }
 
                     chosen.Add(cachedSpell.FormKey);
@@ -1119,7 +1128,7 @@ namespace TrueUnleveledSkyrim.Patch
                 PatchReport.Trace(npc, "Must-receive by plugin or keyword: " + candidates + " matching spells in the spell pool. Level " + npcLevel + " allows spell tier up to " + tierCap +
                     ", estimated magicka " + Math.Round(npcMagicka) + ", archmage " + isArchmage + ". Not taught by any spell tome " + notTaughtByATome +
                     " (set IncludeNonTomeSpells on the rule to allow these), already known " + alreadyKnown + ", forbidden by a rule " + blocked +
-                    ", tier too high " + tooHighTier + ", too expensive " + tooCostly + ", concentration or ground-targeted (needs archmage) " + needsArchmage + ", other " + otherReasons +
+                    ", tier too high " + tooHighTier + ", too expensive " + tooCostly + ", concentration or ground-targeted (needs archmage) " + needsArchmage + ", doesn't cast like the race's own spells " + notCastStyle + ", other " + otherReasons +
                     ". If the pool count is 0, no spell with that plugin or keyword passed the pool filters (a castable hand spell with a school perk, learnable from a tome or allowed by IncludeNonTomeSpells, and not tied to a quest or location).");
             }
 
@@ -1215,6 +1224,10 @@ namespace TrueUnleveledSkyrim.Patch
             Dictionary<(MagicSchool School, SpellElement Element), PerkLevel> highestKnownSpellLevelsElement = new();
 
             bool spellsFromPerks = rules is not null && rules.SpellsFromPerks;
+
+            // A rule can lift the cast style limits of races with their own casting animations.
+            bool anyCastStyle = rules is not null && rules.AllowAnyCastStyle;
+            bool strictCastStyle = isRestrictedRace && !anyCastStyle;
             var allowedCastTypes = new HashSet<CastType>();
             var allowedTargetTypes = new HashSet<TargetType>();
             float maxAllowedCastTime = 1.0f;
@@ -1286,7 +1299,7 @@ namespace TrueUnleveledSkyrim.Patch
                     isMagicUser = true;
 
                 // Normal humanoid casting works for an NPC that has no vanilla spells to copy the cast styles from.
-                if (!isRestrictedRace)
+                if (!strictCastStyle)
                 {
                     allowedCastTypes.Add(CastType.FireAndForget);
                     allowedTargetTypes.Add(TargetType.Self);
@@ -1331,7 +1344,7 @@ namespace TrueUnleveledSkyrim.Patch
                     if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) continue;
                     if (!allowedTargetTypes.Contains(cachedSpell.Spell.TargetType)) continue;
                     if (cachedSpell.Spell.CastDuration > maxAllowedCastTime) continue;
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) continue;
+                    if (strictCastStyle && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) continue;
 
                     if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) continue;
 
@@ -1339,6 +1352,16 @@ namespace TrueUnleveledSkyrim.Patch
                     npcKnownSpellKeys.Add(cachedSpell.FormKey);
                     receivedForcedSpells = true;
                 }
+            }
+
+            // With any cast style allowed, normal casting works even if the NPC has no spells to copy the cast style from.
+            if (anyCastStyle)
+            {
+                allowedCastTypes.Add(CastType.FireAndForget);
+                allowedTargetTypes.Add(TargetType.Self);
+                allowedTargetTypes.Add(TargetType.Touch);
+                allowedTargetTypes.Add(TargetType.Aimed);
+                allowedTargetTypes.Add(TargetType.TargetActor);
             }
 
             // Pure melee and ranged NPCs don't get spells.
@@ -1376,7 +1399,7 @@ namespace TrueUnleveledSkyrim.Patch
                 if (isArchmage)
                 {
                     // Races with their own casting animations keep to the cast styles of their vanilla spells.
-                    if (!isRestrictedRace)
+                    if (!strictCastStyle)
                     {
                         allowedCastTypes.Add(CastType.Concentration);
                         allowedTargetTypes.Add(TargetType.TargetLocation);
@@ -1429,7 +1452,7 @@ namespace TrueUnleveledSkyrim.Patch
                     PatchReport.Trace(npc, "Spells read from the NPC: " + (npc.ActorEffect?.Count ?? 0) + " spell list entries (" + leveledLists + " leveled spell lists, searched through including nested ones) = " +
                         flattenedSpells.Count + " spells, " + flattenedSpells.Count(known => known.Type == SpellType.Spell && known.BaseCost > 0) + " of them with a magicka cost");
                     PatchReport.Trace(npc, "Learned from them: cast types " + string.Join("/", allowedCastTypes) + ", target types " + string.Join("/", allowedTargetTypes) + ", longest cast time " + maxAllowedCastTime +
-                        ", " + vanillaCastSignatures.Count + " exact cast styles (restricted race: " + isRestrictedRace + "), schools " + string.Join("/", allowedSchools) + ", element focus " + npcArchetype +
+                        ", " + vanillaCastSignatures.Count + " exact cast styles (restricted race: " + isRestrictedRace + ", any cast style allowed by a rule: " + anyCastStyle + "), schools " + string.Join("/", allowedSchools) + ", element focus " + npcArchetype +
                         ". Level " + npcLevel + " allows spell tier up to " + levelBasedFloor + ", estimated magicka " + Math.Round(npcMagicka));
                 }
 
@@ -1448,7 +1471,7 @@ namespace TrueUnleveledSkyrim.Patch
                     if (!allowedCastTypes.Contains(cachedSpell.Spell.CastType)) { Reject("cast type the NPC doesn't use"); continue; }
                     if (!allowedTargetTypes.Contains(cachedSpell.Spell.TargetType)) { Reject("target type the NPC doesn't use"); continue; }
                     if (cachedSpell.Spell.CastDuration > maxAllowedCastTime) { Reject("cast time longer than its own spells"); continue; }
-                    if (isRestrictedRace && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { Reject("doesn't cast exactly like a spell the race already uses (cast type, target, slot, cast time)"); continue; }
+                    if (strictCastStyle && !vanillaCastSignatures.Contains(GetCastSignature(cachedSpell.Spell))) { Reject("doesn't cast exactly like a spell the race already uses (cast type, target, slot, cast time)"); continue; }
 
                     if (!CasterSatisfiesSpellConditions(cachedSpell.Spell, npc, race)) { Reject("spell conditions"); continue; }
 

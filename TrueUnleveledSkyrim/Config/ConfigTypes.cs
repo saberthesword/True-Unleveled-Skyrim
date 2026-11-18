@@ -175,6 +175,12 @@ namespace TrueUnleveledSkyrim.Config
         // Spells named in MustReceive.SpellIDs are always given as they are.
         [JsonProperty] public bool IncludeNonTomeSpells { get; set; } = false;
 
+        // Races with their own casting animations (dragon priests, hagravens) normally only get spells that cast exactly like a spell they
+        // already use (same cast type, target type, equip slot and cast time), and nothing at all if they have no such spell to copy from.
+        // Set this to true to treat the matching NPCs like any other: they get the rule's spells whatever their cast style. Whether that
+        // animates well in game is not checked, so test it.
+        [JsonProperty] public bool AllowAnyCastStyle { get; set; } = false;
+
         // If false, the NPC gets none of the regular distribution, only the MustReceive spells.
         [JsonProperty] public bool NaturalDistribution { get; set; } = true;
 
